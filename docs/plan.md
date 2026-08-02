@@ -12,7 +12,7 @@
 - [x] Phase 4 — Human auth + API (OIDC, RBAC, ticket routes, SES notifier)
 - [x] Phase 5 — Frontend (React SPA mirroring gammon-powershell-portal UI)
 - [x] Phase 6 — Packaging + docs (Dockerfile, k8s manifests, agent contract)
-- [ ] Phase 7 — Hardening (expiry sweep, structured logging, rate limiting)
+- [x] Phase 7 — Hardening (expiry sweep, structured logging, rate limiting)
 
 ## Context
 
@@ -98,6 +98,7 @@ create (with `resourceArns` + `tags`) → poll 15–30 s → on APPROVED: `execu
 ## Decision log
 
 - 2026-08-02 — Plan approved. Stack: React (Vite) + FastAPI (user preference; boto3/Pydantic fit, MCP ecosystem is Python). S3 Object Lock added as storage option; tags + resourceArns added to ticket model.
+- 2026-08-02 — Phase 7 done. Expiry sweep runs in-app via FastAPI lifespan every 10 min; APPROVED TTL counts from the last approval, PENDING from creation; EXECUTING and terminal tickets are never expired. Deviation from plan: stdlib logging + a dependency-free sliding-window rate limiter (60 req/min per client on /api/agent/*) instead of structlog/slowapi, to keep the image lean — revisit when scaling out. 57 backend tests green.
 - 2026-08-02 — Phase 6 done. Dockerfile (node build → python:3.12-slim, non-root 1001); k8s manifests validate with `kubectl apply --dry-run=client`; agent contract doc includes botocore snippet for the presigned identity header; `scripts/agent_flow_demo.py` exercises the full agent flow against a running gate.
 - 2026-08-02 — Phase 5 done. Pages: dashboard (status cards + recent), tickets (Active/History tabs, tag filter, 10 s polling on active), detail (lineage chain, hash-locked parameters view, audit timeline, approve/reject with confirm dialogs + interlock, supersede via react-hook-form+zod). TanStack Query `refetchInterval` stops on terminal statuses. Approve/reject buttons self-hide for proposer/duplicate-approver/viewer (server still enforces). SPA served by FastAPI with index.html fallback (verified).
 - 2026-08-02 — Phases 3–4 done. Agent auth rejects pre-STS on envelope problems (wrong host, unsigned server-id, stale date, replay) so STS is only called for plausible requests. Role is resolved at login and stored in the session (role changes need re-login). AUTH_MODE=dev provides local fake login; settings validation refuses it in production. `/api/me`, list filters (status/assignee/tag), audit trail verified by tests (53 passing).
