@@ -10,3 +10,8 @@ itsdangerous>=2.2
 httpx>=0.27
 boto3>=1.34
 python-ulid>=2.6
+# MCP Streamable HTTP server + OAuth2.1 Resource Server support for /mcp
+# (backend/app/api/mcp_gateway.py). Pinned to the 2.x line this was built
+# and tested against — the SDK's public API has moved fast (FastMCP was
+# renamed MCPServer between 1.x and 2.0).
+mcp>=2.0.0,<3

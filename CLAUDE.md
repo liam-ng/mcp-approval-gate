@@ -58,13 +58,15 @@ Environment note: in this WSL sandbox, Node is only on PATH after `export PATH="
 - `dynamodb` — `dynamodb_store.py`, currently a documented stub (`PK=TICKET#id / SK=META|EVENT#seq`, GSI1 status, GSI2 lineage, GSI3 idempotency; `append_event` via `TransactWriteItems` conditional on `seq`).
 - `s3` — `s3_store.py`, currently a documented stub (Object Lock / WORM, one immutable object per event, CAS via conditional `PutObject`).
 
-### Two independent auth paths — do not couple them
+### Three independent auth paths — do not couple them
 - **Human** (`backend/app/api/auth.py`, `backend/app/auth/rbac.py`): server-side OIDC Authorization Code flow via Authlib, httpOnly session cookie. The provider is built entirely from env (`OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`/`OIDC_SCOPES`/`OIDC_GROUPS_CLAIM`) so swapping IAM Identity Center for Azure AD/Entra ID is a config-only change — never hardcode a provider-specific assumption here. `APPROVER_EMAILS` is a fallback allowlist because Identity Center's group claims are weak.
 - **Agent** (`backend/app/auth/agent_auth.py`, `replay_cache.py`): verifies a presigned `sts:GetCallerIdentity` request (Vault/aws-iam-authenticator pattern) carried in the `X-Gate-Identity` header — validates host/body/date window, checks `X-Gate-Server-Id` is in `SignedHeaders`, checks a replay cache, forwards to STS, and matches the resulting ARN against `ALLOWED_AGENT_ARNS` globs. The gate itself needs **no** AWS permissions to do this verification. This path must stay untouched by any future human-IdP migration.
+- **IDE/MCP** (`backend/app/api/mcp_gateway.py`, `backend/app/auth/mcp_token_verifier.py`): OAuth 2.1 Resource Server for Cursor/VS Code, gated by `MCP_ENABLED`. The gate is never in the browser-redirect/token-exchange path — it only verifies the bearer token's signature against the OIDC IdP's JWKS. See `docs/mcp-gateway.md`.
 
 ### API surface
-- `backend/app/api/agent_tickets.py` — SigV4-only routes: create (idempotent), poll, `execution/start` (hash echo), `execution/result`.
+- `backend/app/api/agent_tickets.py` — SigV4-only routes: create (idempotent), list (caller's own tickets, e.g. to discover ones an MCP tool call created), poll, `execution/start` (hash echo), `execution/result`.
 - `backend/app/api/tickets.py` — session-only routes: list/filter, detail (ticket + lineage + audit events), approve, reject, supersede.
+- `backend/app/api/mcp_gateway.py` — `build_mcp_app()`: the `/mcp` Streamable HTTP route (official `mcp` SDK's `MCPServer`), tools `create_change_ticket` / `check_ticket_status`. Mounted at the ASGI level in `main.py`, not via `app.include_router` — see the comment there for why (the SDK's own auth middleware and `main.py`'s SPA catch-all route can't cleanly nest inside the same FastAPI router).
 - `backend/app/api/errors.py` — maps the `ServiceError`/`RepoError` hierarchy to `{"error": {"code","message"}}`.
 - `backend/app/api/middleware.py` — access logging + a dependency-free sliding-window rate limiter on `/api/agent/*`.
 - `backend/app/jobs/expiry.py` — background sweep (started from `main.py`'s lifespan) that expires stale `PENDING_APPROVAL`/`APPROVED` tickets per `APPROVAL_TTL_HOURS`.
@@ -77,11 +79,12 @@ React 19 + Vite + TypeScript strict, shadcn/ui + Tailwind, brand tokens mirrored
 Everything is `pydantic-settings`, validated at import time — invalid/missing env crashes at boot rather than on first request. Cross-field checks enforce e.g. `AUTH_MODE=dev` never in `ENV=production`, `STORE_BACKEND=dynamodb` requires `DYNAMODB_TABLE`, `STORE_BACKEND=s3` requires `S3_BUCKET`. `.env.example` documents every scenario (dev vs oidc, each OIDC provider, each store backend) as commented-out alternatives — keep it in sync when adding new env vars.
 
 ### Deployment (`deploy/k8s/`)
-Single replica, `strategy: Recreate` (RWO PVC + single-writer JSONL store), IRSA ServiceAccount, `/api/healthz` probes, TLS-mandatory Ingress (SigV4 identity headers must never traverse plaintext).
+Single replica, `strategy: Recreate` (RWO PVC + single-writer JSONL store), IRSA ServiceAccount, `/api/healthz` probes, TLS-mandatory Ingress (SigV4 identity headers must never traverse plaintext). `istio-authorizationpolicy.yaml` + `deploy/scp/` isolate the upstream AWS API MCP server so this gate is the only legitimate caller — see `docs/mcp-gateway.md`.
 
 ## Key invariants to preserve
 
 - Never mutate a `Ticket` field outside `apply_event`/`MUTABLE_FIELDS` — that's the whole immutability guarantee.
-- Never let the human-auth and agent-auth code paths depend on each other.
+- Never let the human-auth, agent-auth, and MCP/OAuth code paths depend on each other.
 - `parametersHash` must be computed by the gate (not trusted from the agent) and echoed back at execution start.
+- `aws:RequestTag/gateTicketId` only exists on resource-*creating* EC2 calls (those with a `TagSpecifications` param) — never apply it as a deny-if-absent condition to actions on existing resources (`StopInstances`, `TerminateInstances`, ...), or it silently blocks the legitimate executor too. See `docs/agent-contract.md`'s "Strong enforcement" section.
 - Keep `.env.example` and `docs/plan.md`'s decision log updated when settings or architecture change.

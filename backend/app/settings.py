@@ -52,6 +52,22 @@ class Settings(BaseSettings):
     ses_from_address: str | None = None
     ses_region: str | None = None
 
+    # --- MCP gateway (IDE clients — Cursor / VS Code — connect here; see
+    # docs/mcp-gateway.md). The gate is an OAuth 2.1 Resource Server only: it
+    # never runs the browser auth-code flow itself, it just verifies the
+    # bearer token the IDE already obtained from the OIDC IdP. Defaults to
+    # the same issuer as human auth (a second, public/native OAuth client
+    # registered there for Cursor/VSCode) — override MCP_OAUTH_ISSUER only if
+    # IDE clients must authenticate against a different AS. ---
+    mcp_enabled: bool = False
+    mcp_oauth_issuer: str | None = None
+    mcp_oauth_audience: str | None = None     # expected `aud` claim; strongly recommended
+    mcp_required_scopes: str = ""             # space-separated; empty = no scope requirement
+    # The trusted automation identity that executes MCP-created tickets once
+    # approved, via the existing SigV4 agent contract. Must also appear in
+    # ALLOWED_AGENT_ARNS. Never the human's own credentials.
+    mcp_executor_arn: str | None = None
+
     @field_validator("required_approvals")
     @classmethod
     def _approvals_range(cls, v: int) -> int:
@@ -73,6 +89,10 @@ class Settings(BaseSettings):
             raise ValueError("STORE_BACKEND=s3 requires S3_BUCKET")
         if self.notify_on_create and not (self.ses_from_address and self.ses_region):
             raise ValueError("NOTIFY_ON_CREATE requires SES_FROM_ADDRESS and SES_REGION")
+        if self.mcp_enabled and not (self.mcp_issuer and self.mcp_executor_arn):
+            raise ValueError(
+                "MCP_ENABLED requires an OIDC issuer (OIDC_ISSUER or MCP_OAUTH_ISSUER) and MCP_EXECUTOR_ARN"
+            )
         return self
 
     @property
@@ -86,6 +106,18 @@ class Settings(BaseSettings):
     @property
     def allowed_agent_arn_globs(self) -> list[str]:
         return [a.strip() for a in self.allowed_agent_arns.split(",") if a.strip()]
+
+    @property
+    def mcp_issuer(self) -> str | None:
+        return self.mcp_oauth_issuer or self.oidc_issuer
+
+    @property
+    def mcp_resource_server_url(self) -> str:
+        return f"{self.public_base_url.rstrip('/')}/mcp"
+
+    @property
+    def mcp_required_scope_list(self) -> list[str]:
+        return [s for s in self.mcp_required_scopes.split() if s]
 
 
 _settings: Settings | None = None

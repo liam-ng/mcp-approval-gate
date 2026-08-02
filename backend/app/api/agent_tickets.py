@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Header, Response
 
 from app.auth.agent_auth import AgentIdentity, verify_agent
 from app.core import service
-from app.core.models import Ticket
+from app.core.models import Ticket, TicketStatus
 from app.core.schemas import (
     AgentPollResponse,
     ExecutionResultRequest,
@@ -46,6 +46,27 @@ async def create_ticket(
     else:
         notify_ticket_created(ticket)
     return ticket
+
+
+@router.get("", response_model=list[AgentPollResponse], response_model_by_alias=True)
+async def list_my_tickets(agent: Agent, repo: Repo, status: TicketStatus | None = None, limit: int = 50):
+    """Discover tickets assigned to the caller that it did not itself create —
+    e.g. ones a human proposed via /mcp (api/mcp_gateway.py). The executor
+    polls this (typically `?status=APPROVED`) instead of tracking ticket ids
+    it never received."""
+    page = await repo.query_by_status(status, limit=limit) if status else await repo.query_all(limit=limit)
+    mine = [t for t in page.items if t.assignee == agent.caller_arn]
+    return [
+        AgentPollResponse(
+            ticket_id=t.ticket_id,
+            status=t.status,
+            approved_by=[a.approved_by for a in t.approvals],
+            rejection_reason=t.rejection_reason,
+            superseded_by=t.superseded_by,
+            action_details=t.action_details,
+        )
+        for t in mine
+    ]
 
 
 @router.get("/{ticket_id}", response_model=AgentPollResponse, response_model_by_alias=True)

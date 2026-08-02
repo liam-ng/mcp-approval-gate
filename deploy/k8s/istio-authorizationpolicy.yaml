@@ -1,0 +1,75 @@
+# Network-level enforcement that end users cannot bypass the approval gate by
+# pointing their IDE (or any other in-cluster workload) directly at the
+# upstream AWS API MCP server. See docs/mcp-gateway.md for the full
+# architecture and why this is needed in addition to, not instead of, the SCP
+# in deploy/scp/ (Istio only covers in-mesh traffic; the SCP covers every
+# path to the AWS API, in-cluster or not).
+#
+# ASSUMPTIONS — adjust to match the real deployment:
+#   - The upstream server (awslabs aws-api-mcp-server or equivalent) runs in
+#     this same namespace with label `app: aws-api-mcp-server`. If it runs
+#     elsewhere, add a matching `from.source.namespaces` entry below and move
+#     this policy to that namespace.
+#   - Istio sidecar injection is enabled for both workloads
+#     (`istio-injection: enabled` on the namespace, or per-pod annotation).
+#   - The gate's own ServiceAccount is `mcp-approval-gate` (deploy/k8s/serviceaccount.yaml).
+#
+# Apply only after confirming sidecar injection and mTLS are actually active
+# (`istioctl proxy-status`) — an AuthorizationPolicy on a workload with no
+# sidecar is silently unenforced.
+
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict-mtls
+  namespace: mcp-approval-gate
+spec:
+  # Mesh-wide STRICT mTLS in this namespace: every pod's identity is a
+  # verifiable SPIFFE ID (cluster.local/ns/<ns>/sa/<sa>), which is what the
+  # AuthorizationPolicy below authorizes against. Without STRICT, a
+  # non-mesh client could still speak plaintext to a workload that permits it.
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: aws-api-mcp-server-gate-only
+  namespace: mcp-approval-gate
+spec:
+  selector:
+    matchLabels:
+      app: aws-api-mcp-server
+  action: ALLOW
+  rules:
+    # Any ALLOW policy makes Istio deny-by-default for the selected
+    # workload, so this is a full allowlist, not an addition to some other
+    # default-allow: only the gate's own identity may open a connection to
+    # aws-api-mcp-server. Every other pod (including anything a developer
+    # deploys themselves to try to reach it directly) gets a 403 from the
+    # sidecar before the request ever reaches the container.
+    - from:
+        - source:
+            principals: ["cluster.local/ns/mcp-approval-gate/sa/mcp-approval-gate"]
+---
+# Defense in depth for the case a pod is ever run without a sidecar (e.g. a
+# host-network debug pod, or injection accidentally disabled): a plain L3/L4
+# NetworkPolicy backstop, independent of the mesh. Requires a CNI that
+# enforces NetworkPolicy (Calico, Cilium, the AWS VPC CNI's network policy
+# mode, etc.) — confirm before relying on it as the sole control.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-api-mcp-server-gate-only
+  namespace: mcp-approval-gate
+spec:
+  podSelector:
+    matchLabels:
+      app: aws-api-mcp-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mcp-approval-gate

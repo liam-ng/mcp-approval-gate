@@ -142,14 +142,48 @@ SDK response's `ResponseMetadata.RequestId`.
 ## Strong enforcement (for the agent-role owner)
 
 The gate verifies *intent* (hash echo) but cannot observe the actual AWS API
-call. Close the gap at IAM:
+call. Close the gap at IAM and, for account-wide bypass resistance, at the
+AWS Organizations SCP layer (`deploy/scp/deny-ec2-mutations-except-gate.json`):
 
-1. Add a condition to the agent role requiring `aws:RequestTag/gateTicketId`
-   on mutating EC2 actions, so any call that didn't come through the gate
-   fails at IAM.
-2. Scope the role's `Resource` element (or ABAC tag conditions) using the
+1. Restrict who can call mutating EC2 actions **at all** to this role — an
+   SCP `Deny` keyed on `StringNotEquals: {aws:PrincipalArn: <this role>}` is
+   the actual bypass fix, since it blocks every other caller (a developer's
+   own credentials, the public MCP server run standalone, the CLI, the
+   console) regardless of tool.
+2. Additionally require `aws:RequestTag/gateTicketId` — but **only** on
+   resource-*creating* calls that accept a `TagSpecifications` parameter
+   (`RunInstances`, `CreateSecurityGroup`, `CreateVolume`, `CreateSnapshot`,
+   `CreateKeyPair`). Actions on an *existing* resource (`StopInstances`,
+   `TerminateInstances`, `AuthorizeSecurityGroupIngress`, ...) carry no
+   `TagSpecifications` at all, so `aws:RequestTag` is never present on them —
+   a deny-if-absent condition on those would block this role from ever
+   performing them, not just unapproved callers. There is no AWS-native
+   condition key that binds an arbitrary existing-resource call to "went
+   through an approved ticket"; that check is the gate's own
+   `parametersHash` + status-machine logic, which this role is trusted to
+   follow because (1) above, plus network isolation (see
+   `deploy/k8s/istio-authorizationpolicy.yaml`), make it the only code path
+   holding this role's credentials.
+3. Scope the role's `Resource` element (or ABAC tag conditions) using the
    approved `resourceArns`.
-3. Optionally correlate nightly: gate `awsRequestIds` ↔ CloudTrail events.
+4. Optionally correlate nightly: gate `awsRequestIds` ↔ CloudTrail events.
+
+## Discovering tickets without a known id — `GET /api/agent/tickets`
+
+Tickets aren't only created by this agent's own `POST` calls. A human can
+also open one conversationally through the gate's `/mcp` endpoint
+(`docs/mcp-gateway.md`) — those tickets share this role's `assignee`, but
+the agent process was never told the id. Poll the list endpoint (same
+`X-Gate-Identity` auth, results filtered server-side to tickets whose
+`assignee` is your own verified ARN):
+
+```
+GET /api/agent/tickets?status=APPROVED
+```
+
+Response: an array of the same object `GET /api/agent/tickets/{id}` returns.
+Treat every item exactly like a ticket you created yourself — poll/execute
+via `execution/start` → `execution/result` as usual.
 
 ## Error envelope
 

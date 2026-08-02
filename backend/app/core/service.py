@@ -145,6 +145,32 @@ async def create_agent_ticket(
     return ticket, True
 
 
+async def create_mcp_ticket(
+    repo: TicketRepository, payload: TicketCreateRequest, proposer_email: str,
+    executor_arn: str, idempotency_key: str | None,
+) -> tuple[Ticket, bool]:
+    """Ticket creation from the /mcp route (see api/mcp_gateway.py).
+
+    The proposer is a human, identified by the OAuth bearer token the IDE
+    presented — never an AI agent. The assignee is the fixed, trusted
+    executor identity (MCP_EXECUTOR_ARN) that polls and executes via the
+    existing SigV4 agent contract; the human's own credentials never touch
+    AWS. Because proposed_by != assignee, approve_ticket's
+    proposer-cannot-approve-own-ticket rule still applies normally, and
+    because proposed_by is the human (not the executor), that same human
+    cannot approve their own MCP-created ticket either.
+    """
+    if idempotency_key:
+        existing = await repo.find_by_idempotency_key(executor_arn, idempotency_key)
+        if existing:
+            return existing, False
+    ticket, created = build_ticket(
+        payload, assignee=executor_arn, proposed_by=proposer_email, idempotency_key=idempotency_key
+    )
+    await repo.create_ticket(ticket, created)
+    return ticket, True
+
+
 async def get_agent_ticket(repo: TicketRepository, ticket_id: str, caller_arn: str) -> Ticket:
     ticket = await repo.get_ticket(ticket_id)
     if ticket is None:

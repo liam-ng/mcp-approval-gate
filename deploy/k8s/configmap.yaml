@@ -19,7 +19,8 @@ data:
 
   # --- Agent auth ---
   GATE_SERVER_ID: "mcp-approval-gate-prod"
-  ALLOWED_AGENT_ARNS: "arn:aws:iam::ACCOUNT_ID:role/mcp-server-*"
+  # Must cover MCP_EXECUTOR_ARN below (and any other autonomous agent roles).
+  ALLOWED_AGENT_ARNS: "arn:aws:iam::ACCOUNT_ID:role/mcp-server-*,arn:aws:iam::ACCOUNT_ID:role/mcp-approval-gate-executor"
 
   # --- Workflow ---
   REQUIRED_APPROVALS: "1" # or "2" for peer + manager
@@ -36,3 +37,12 @@ data:
   NOTIFY_ON_CREATE: "true"
   SES_FROM_ADDRESS: "approval-gate@example.com"
   SES_REGION: "ap-east-1"
+
+  # --- MCP gateway (IDE clients: Cursor / VS Code — docs/mcp-gateway.md) ---
+  # Register a second, public/native OAuth client (PKCE, no secret) for IDE
+  # clients in the same IdP as OIDC_ISSUER above before enabling this.
+  MCP_ENABLED: "true"
+  MCP_OAUTH_AUDIENCE: "api://mcp-approval-gate" # match the IdP app registration
+  MCP_REQUIRED_SCOPES: "mcp:invoke"
+  # Must also be included in ALLOWED_AGENT_ARNS above.
+  MCP_EXECUTOR_ARN: "arn:aws:iam::ACCOUNT_ID:role/mcp-approval-gate-executor"

@@ -1,0 +1,103 @@
+{
+  "_comment": [
+    "Service Control Policy — attach at the OU or account level in AWS Organizations.",
+    "See docs/mcp-gateway.md 'Can an SCP stop the public AWS API MCP Server' for the full",
+    "rationale. An SCP has no condition key for 'which software made this call' — it can",
+    "only see the calling principal and the request itself. What it CAN do is deny these",
+    "EC2 actions to every principal except the gate's own trusted executor role, which",
+    "closes the bypass regardless of what tool made the call: the public aws-api-mcp-",
+    "server run with a developer's own credentials, the AWS CLI, the console, or a hand-",
+    "written script all hit the same Deny. This is the one control in this repo that isn't",
+    "limited to in-cluster traffic (compare deploy/k8s/istio-authorizationpolicy.yaml,",
+    "which only governs the mesh) — it's the backstop for someone assuming AWS",
+    "credentials from outside the cluster entirely.",
+    "",
+    "SCPs are guardrails, not grants: they only remove permissions an identity policy",
+    "already gave, and the sole way to be exempt from a Deny is to be excluded by its",
+    "Condition. They never apply to the organization's management account.",
+    "",
+    "Before attaching: replace ACCOUNT_ID and the role name/path with the real",
+    "MCP_EXECUTOR_ARN (== the identity in ALLOWED_AGENT_ARNS that runs the SigV4 agent",
+    "contract in docs/agent-contract.md), and review the action list against your actual",
+    "v1 EC2 scope.",
+    "",
+    "Statement A denies the listed actions to everyone except the executor role — this is",
+    "the actual bypass fix and is unconditionally correct.",
+    "",
+    "Statement B additionally requires aws:RequestTag/gateTicketId, but ONLY on the",
+    "subset of actions that create a new resource and therefore accept a",
+    "TagSpecifications parameter (RunInstances, CreateSecurityGroup, CreateVolume,",
+    "CreateSnapshot, CreateKeyPair). Do NOT extend that condition to actions on existing",
+    "resources (StopInstances, TerminateInstances, AuthorizeSecurityGroupIngress, ...) —",
+    "those calls carry no TagSpecifications parameter at all, so aws:RequestTag is never",
+    "present on them and a Deny-if-absent condition would silently block the executor",
+    "from ever performing them, not just unapproved callers. There is no AWS-native",
+    "condition key that binds an arbitrary existing-resource action to 'this went through",
+    "an approved ticket' — that check is the gate's own parametersHash + status-machine",
+    "logic (core/service.py), which the executor is trusted to follow because Statement A",
+    "plus the Istio policy make it the only code path holding this role's credentials."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyEc2MutationsExceptGateExecutor",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:RebootInstances",
+        "ec2:TerminateInstances",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifyInstanceMetadataOptions",
+        "ec2:CreateTags",
+        "ec2:DeleteTags",
+        "ec2:CreateSecurityGroup",
+        "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:CreateVolume",
+        "ec2:DeleteVolume",
+        "ec2:AttachVolume",
+        "ec2:DetachVolume",
+        "ec2:CreateSnapshot",
+        "ec2:DeleteSnapshot",
+        "ec2:AssociateAddress",
+        "ec2:DisassociateAddress",
+        "ec2:AllocateAddress",
+        "ec2:ReleaseAddress",
+        "ec2:CreateKeyPair",
+        "ec2:DeleteKeyPair",
+        "ec2:ImportKeyPair"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalArn": ["arn:aws:iam::ACCOUNT_ID:role/mcp-approval-gate-executor"]
+        }
+      }
+    },
+    {
+      "Sid": "DenyGateExecutorUntaggedResourceCreation",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateVolume",
+        "ec2:CreateSnapshot",
+        "ec2:CreateKeyPair"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalArn": ["arn:aws:iam::ACCOUNT_ID:role/mcp-approval-gate-executor"]
+        },
+        "Null": {
+          "aws:RequestTag/gateTicketId": "true"
+        }
+      }
+    }
+  ]
+}

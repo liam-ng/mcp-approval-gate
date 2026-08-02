@@ -265,6 +265,40 @@ def test_execution_start_requires_approval_and_hash(client, respx_mock):
     assert r.json()["error"]["code"] == "INVALID_STATE"
 
 
+@respx.mock
+def test_list_my_tickets_filters_by_assignee_and_status(client, respx_mock):
+    mock_sts(respx_mock)
+    mine = client.post(
+        "/api/agent/tickets", json=create_payload(), headers={"X-Gate-Identity": identity_header()}
+    ).json()
+
+    other = {
+        "GetCallerIdentityResponse": {
+            "GetCallerIdentityResult": {
+                "Arn": "arn:aws:sts::123456789012:assumed-role/mcp-other/x",
+                "Account": "123456789012",
+            }
+        }
+    }
+    respx_mock.post("https://sts.amazonaws.com/").mock(return_value=Response(200, json=other))
+    client.post(
+        "/api/agent/tickets",
+        json=create_payload(subject="Someone else's ticket"),
+        headers={"X-Gate-Identity": identity_header()},
+    )
+
+    respx_mock.post("https://sts.amazonaws.com/").mock(return_value=Response(200, json=STS_JSON))
+    r = client.get("/api/agent/tickets", headers={"X-Gate-Identity": identity_header()})
+    assert r.status_code == 200
+    ticket_ids = [t["ticketId"] for t in r.json()]
+    assert ticket_ids == [mine["ticketId"]]
+
+    r = client.get(
+        "/api/agent/tickets", params={"status": "APPROVED"}, headers={"X-Gate-Identity": identity_header()}
+    )
+    assert r.json() == []
+
+
 async def test_full_agent_flow_with_hash_mismatch(tmp_path):
     """create -> approve -> start (hash echo) -> mismatch rejected -> result,
     exercised at the service layer against one repo instance."""

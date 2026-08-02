@@ -16,11 +16,17 @@ report the result.
   approvers must be distinct and never the proposer.
 - **Storage**: JSONL append-log on a PVC (MVP) behind a repository interface
   shaped for **DynamoDB** or **S3 + Object Lock (WORM)**.
+- **IDE distribution**: end users add *this gate* to Cursor/VS Code as a
+  remote MCP tool (`/mcp`, OAuth2.1) — never the upstream AWS MCP server
+  directly, which is network-isolated (Istio) and SCP-restricted so it's
+  unreachable any other way.
 
 Note that this is a monolithic design as MVP project.
 
-See [docs/plan.md](docs/plan.md) (living plan) and
-[docs/agent-contract.md](docs/agent-contract.md) (MCP-server integration).
+See [docs/plan.md](docs/plan.md) (living plan),
+[docs/agent-contract.md](docs/agent-contract.md) (MCP-server integration),
+and [docs/mcp-gateway.md](docs/mcp-gateway.md) (IDE/MCP setup, OAuth flow,
+Istio + SCP isolation).
 
 ## Architecture
 
@@ -28,8 +34,9 @@ Single container: FastAPI serves `/api/*` and the built React SPA.
 
 ```
 frontend/   React 19 + Vite + shadcn/ui + TanStack Query/Table (portal brand tokens)
-backend/    FastAPI + Pydantic v2; core domain, repo layer, auth, SES notifier
-deploy/k8s/ Deployment (1 replica, Recreate), PVC, IRSA ServiceAccount, Ingress (TLS)
+backend/    FastAPI + Pydantic v2; core domain, repo layer, auth, SES notifier, /mcp gateway
+deploy/k8s/ Deployment (1 replica, Recreate), PVC, IRSA ServiceAccount, Ingress (TLS), Istio isolation
+deploy/scp/ AWS Organizations SCP restricting mutating EC2 actions to the gate's executor role
 ```
 
 ## Ticket lifecycle

@@ -14,6 +14,11 @@
 - [x] Phase 6 — Packaging + docs (Dockerfile, k8s manifests, agent contract)
 - [x] Phase 7 — Hardening (expiry sweep, structured logging, rate limiting)
 
+## Todo
+
+- [] Create a Github action pipeline for frontend and backend to scan code using sonarqube, hard gate for critical CWE, build docker image, scan image using Trivy with critical CVE hard gate, perform simple app start test and unit test, push to Azure contain registry using managed identity, output. 
+- [x] Address open risk: ship the gate itself as an MCP tool (not a fork of the official AWS MCP server) so end users add it directly to Cursor/VS Code. Done: `/mcp` Streamable HTTP route (`backend/app/api/mcp_gateway.py`), OAuth2.1 Resource Server auth, Istio + SCP isolation of the upstream server. See `docs/mcp-gateway.md`.
+
 ## Context
 
 An AI agent (AWS MCP server, running on the existing k8s cluster) can view/create/manage EC2. Today its changes lack auditability and human control. This project builds a **blocking approval gate**: before any mutating EC2 action, the agent must create a change-request ticket, wait for human approval in a web portal, execute only the approved parameters, and report the result. Tickets are immutable — edits create a superseding ticket and mark the old one Deprecated — giving a tamper-evident audit chain.
@@ -33,6 +38,7 @@ UI mirrors the conventions of the internal `gammon-powershell-portal` project (s
 | Approvals required | Env-configurable `REQUIRED_APPROVALS=1\|2`; approvers distinct and never the proposer |
 | Notifications | SES email in MVP — email approvers on ticket creation |
 | Expiry | TTL-based `APPROVAL_TTL_HOURS` (default 72); stale Pending/Approved → EXPIRED |
+| IDE distribution | End users add **the gate** to Cursor/VS Code as a remote MCP tool (`/mcp`, OAuth2.1 Resource Server), never the upstream AWS API MCP server directly — enforced in-cluster by Istio (`deploy/k8s/istio-authorizationpolicy.yaml`) and account-wide by an SCP (`deploy/scp/`). See `docs/mcp-gateway.md`. |
 
 ## Architecture
 
@@ -66,16 +72,19 @@ PENDING_APPROVAL ──approve (n>=required)──> APPROVED ──start (hash e
 
 - **Human**: Authorization Code flow handled entirely by FastAPI (Authlib); provider built only from env (`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_SCOPES`, `OIDC_GROUPS_CLAIM`). Entra ID swap = env change only. RBAC: groups claim → `approver|viewer` via `OIDC_APPROVER_GROUPS`, with `APPROVER_EMAILS` fallback (IAM Identity Center group claims are weak).
 - **Agent**: presigned `sts:GetCallerIdentity` (Vault / aws-iam-authenticator pattern) in `X-Gate-Identity` header; must sign `X-Gate-Server-Id: $GATE_SERVER_ID`; ±5-min date window; replay nonce cache; gate forwards to STS via httpx (gate needs no STS permission); caller ARN checked against `ALLOWED_AGENT_ARNS` globs; verified ARN becomes `assignee`/`proposedBy`.
+- **IDE (MCP)**: `/mcp` is an OAuth2.1 Resource Server — Cursor/VS Code run the auth-code+PKCE flow directly against the same OIDC IdP (the gate is never in that path); the gate only validates the bearer token's signature/claims against the IdP's JWKS (`MCP_OAUTH_ISSUER`/`MCP_OAUTH_AUDIENCE`). Details: `docs/mcp-gateway.md`.
 
 ### API surface
 
-Agent (SigV4): `POST /api/agent/tickets` (idempotent create) · `GET /api/agent/tickets/{id}` (poll; follows `supersededBy`) · `POST .../execution/start` (hash echo, returns approved actionDetails) · `POST .../execution/result`.
+Agent (SigV4): `POST /api/agent/tickets` (idempotent create) · `GET /api/agent/tickets` (list the caller's own tickets, e.g. `?status=APPROVED`, to discover ones a human proposed via `/mcp`) · `GET /api/agent/tickets/{id}` (poll; follows `supersededBy`) · `POST .../execution/start` (hash echo, returns approved actionDetails) · `POST .../execution/result`.
 
 Human (session): `GET /api/tickets` · `GET /api/tickets/{id}` (`{ticket, lineage, auditEvents}`) · `POST .../approve` · `POST .../reject` (reason required) · `POST .../supersede` (atomic new+deprecate) · `GET /api/me` · `GET /api/healthz` (public).
 
+IDE (OAuth2.1 bearer, `docs/mcp-gateway.md`): `POST /mcp` — MCP Streamable HTTP JSON-RPC; tools `create_change_ticket` (proposedBy=human, assignee=`MCP_EXECUTOR_ARN`) and `check_ticket_status`.
+
 ### MCP-server contract (docs/agent-contract.md)
 
-create (with `resourceArns` + `tags`) → poll 15–30 s → on APPROVED: `execution/start` echoing hash → execute the returned actionDetails, propagating `tags` + `gateTicketId` tag where supported → report result with AWS RequestIds. Strong enforcement at IAM: require `aws:RequestTag/gateTicketId` on mutating EC2 actions; scope the agent role by the approved `resourceArns`.
+create (with `resourceArns` + `tags`) → poll 15–30 s → on APPROVED: `execution/start` echoing hash → execute the returned actionDetails, propagating `tags` + `gateTicketId` tag where supported → report result with AWS RequestIds. Strong enforcement: an SCP (`deploy/scp/`) plus IAM restrict mutating EC2 actions to this role alone, everywhere — not just in-cluster; scope the role by the approved `resourceArns`. See `docs/agent-contract.md`'s "Strong enforcement" section for why the `aws:RequestTag/gateTicketId` condition only applies to resource-creating calls, not `StopInstances`-style actions on existing resources.
 
 ## Build order
 
@@ -97,6 +106,7 @@ create (with `resourceArns` + `tags`) → poll 15–30 s → on APPROVED: `execu
 
 ## Decision log
 
+- 2026-08-02 — MCP gateway added. The gate now exposes `/mcp` (Streamable HTTP, via the official `mcp` Python SDK's `MCPServer`) as an OAuth2.1 Resource Server, so end users add the gate — not the upstream AWS API MCP server — to Cursor/VS Code. New `core/service.py:create_mcp_ticket` mirrors `create_agent_ticket` but with proposedBy=human (from the validated bearer token) and assignee=a fixed `MCP_EXECUTOR_ARN`; a new `GET /api/agent/tickets` (SigV4, filtered to the caller's own assignee) lets that executor discover tickets it didn't itself create. Mounted via a small top-level ASGI dispatcher in `main.py` rather than FastAPI sub-routing, because the SDK's auth middleware (bearer verification + the contextvar `get_access_token()` relies on) needs to own its own Starlette app end to end — nesting it under the SPA's catch-all fallback route would either lose that middleware or make the fallback unreachable (see the comment in `main.py`). Network isolation of the real upstream server: an Istio `AuthorizationPolicy` (`deploy/k8s/istio-authorizationpolicy.yaml`, in-cluster only) plus an SCP (`deploy/scp/deny-ec2-mutations-except-gate.json`, account/OU-wide, tool-agnostic) both allow only the gate's trusted executor identity. Corrected a latent bug while writing the SCP: `aws:RequestTag/gateTicketId` only exists on resource-*creating* EC2 calls (those with a `TagSpecifications` param) — extending it to existing-resource actions like `StopInstances` would silently block the executor too, not just bypass attempts; `docs/agent-contract.md`'s "Strong enforcement" section and the SCP file both reflect the fix. Full design and the OAuth topology (gate is a pure Resource Server; Cursor/VS Code run the auth-code+PKCE flow directly against the IdP, never through the gate) are in `docs/mcp-gateway.md`. 64 backend tests green.
 - 2026-08-02 — Plan approved. Stack: React (Vite) + FastAPI (user preference; boto3/Pydantic fit, MCP ecosystem is Python). S3 Object Lock added as storage option; tags + resourceArns added to ticket model.
 - 2026-08-02 — Phase 7 done. Expiry sweep runs in-app via FastAPI lifespan every 10 min; APPROVED TTL counts from the last approval, PENDING from creation; EXECUTING and terminal tickets are never expired. Deviation from plan: stdlib logging + a dependency-free sliding-window rate limiter (60 req/min per client on /api/agent/*) instead of structlog/slowapi, to keep the image lean — revisit when scaling out. 57 backend tests green.
 - 2026-08-02 — Phase 6 done. Dockerfile (node build → python:3.12-slim, non-root 1001); k8s manifests validate with `kubectl apply --dry-run=client`; agent contract doc includes botocore snippet for the presigned identity header; `scripts/agent_flow_demo.py` exercises the full agent flow against a running gate.

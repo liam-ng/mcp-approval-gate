@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.applications import Starlette
 
 from app.api.errors import install_error_handlers
 from app.api.middleware import install_middleware
@@ -16,7 +17,7 @@ from app.settings import get_settings
 logging.basicConfig(level=logging.INFO)
 
 
-def create_app() -> FastAPI:
+def create_app(mcp_app: Starlette | None = None) -> FastAPI:
     settings = get_settings()  # crashes at boot on invalid env
 
     @asynccontextmanager
@@ -27,7 +28,14 @@ def create_app() -> FastAPI:
         sweep = asyncio.create_task(
             run_expiry_loop(get_repository(), settings.approval_ttl_hours)
         )
-        yield
+        async with AsyncExitStack() as stack:
+            if mcp_app is not None:
+                # The MCP sub-app is dispatched to directly at the ASGI level
+                # (see the bottom of this module), bypassing Starlette's own
+                # lifespan protocol for it — so its session manager needs to
+                # be started here instead, alongside the expiry sweep.
+                await stack.enter_async_context(mcp_app.router.lifespan_context(mcp_app))
+            yield
         sweep.cancel()
 
     app = FastAPI(title="MCP Approval Gate", version="0.1.0", lifespan=lifespan)
@@ -70,4 +78,29 @@ def _mount_spa(app: FastAPI) -> None:
         return FileResponse(dist / "index.html")
 
 
-app = create_app()
+_settings = get_settings()
+
+if _settings.mcp_enabled:
+    # The MCP SDK's Starlette app owns its own auth middleware stack (bearer
+    # token verification + a contextvar populated for get_access_token()),
+    # which only works if that app's own routing handles the request end to
+    # end. Mounting it as a FastAPI sub-route would either lose that
+    # middleware or, mounted at "/", shadow the SPA's catch-all fallback (see
+    # docs/mcp-gateway.md). Instead, dispatch by exact path at the ASGI
+    # level, above both routers, so each app only ever sees the requests it
+    # owns — its lifespan is nested inside create_app()'s instead, since
+    # only one of the two ever receives the ASGI "lifespan" scope below.
+    from app.api.mcp_gateway import build_mcp_app
+
+    _mcp_app = build_mcp_app(_settings)
+    _fastapi_app = create_app(mcp_app=_mcp_app)
+    _MCP_PATHS = ("/mcp", "/.well-known/oauth-protected-resource")
+
+    async def app(scope, receive, send):  # noqa: N802 - ASGI callable, not a class
+        if scope["type"] == "http" and scope["path"].startswith(_MCP_PATHS):
+            await _mcp_app(scope, receive, send)
+        else:
+            await _fastapi_app(scope, receive, send)
+
+else:
+    app = create_app()
