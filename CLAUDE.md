@@ -1,0 +1,87 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A **blocking approval gate**: an AI agent (AWS MCP server) must create a change-request ticket, wait for human approval in a web portal, execute exactly the approved parameters, and report the result, before it's allowed to mutate EC2. Tickets are immutable — editing a submitted ticket creates a *superseding* ticket and marks the original `DEPRECATED`, preserving full lineage for audit.
+
+Single deployable: FastAPI serves both `/api/*` and the built React SPA out of one container (`backend/app/main.py:_mount_spa`).
+
+`docs/plan.md` is the living design doc — checkboxes and a dated decision log are updated at the end of every phase/change. Read it for the full rationale behind anything below. (There is also a stale root-level `plan.md` from the very first commit — `docs/plan.md` is the one that's kept current.)
+
+## Commands
+
+Backend (Python 3.12, from `backend/`):
+```bash
+pip install -e ".[dev]"
+cp ../.env.example .env
+uvicorn app.main:app --reload              # http://localhost:8000
+
+python -m pytest                           # full suite — MUST run from backend/
+python -m pytest tests/test_status_machine.py            # one file
+python -m pytest tests/test_agent_api.py -k hash_mismatch # one test by name
+```
+`asyncio_mode = "auto"` is configured in `backend/pyproject.toml`; running pytest from the repo root instead of `backend/` makes async tests fail.
+
+Frontend (from `frontend/`):
+```bash
+npm install
+npm run dev          # http://localhost:5173, proxies /api -> :8000 (vite.config.ts)
+npm run build         # tsc --noEmit && vite build — this is the frontend "check"
+```
+
+Dev-mode login (no IdP needed, `AUTH_MODE=dev`, refused when `ENV=production`):
+`GET /api/auth/login?email=you@x.com&role=approver`
+
+Docker / k8s:
+```bash
+docker build -t REGISTRY/mcp-approval-gate:TAG .
+kubectl apply --dry-run=client -f deploy/k8s/
+```
+
+Environment note: in this WSL sandbox, Node is only on PATH after `export PATH="$HOME/.nvm/versions/node/v24.18.1/bin:$PATH"`, and `pip install` needs `--break-system-packages`.
+
+## Architecture
+
+### Domain core (`backend/app/core/`)
+- `models.py` — Pydantic v2 models. `Ticket`, `ActionDetails`, `Approval`, `Execution`, `AuditEvent`. All API-facing models use `alias_generator=to_camel` so wire format is camelCase while Python stays snake_case. `MUTABLE_FIELDS` is the frozenset of the only fields an event is allowed to change (`status`, `approvals`, `rejected_*`, `superseded_by`, `execution`, `seq`) — subject/actionDetails/plannedDate etc. are frozen forever after creation.
+- `status_machine.py` — single source of truth for legal `(from_status, to_status)` transitions and which actor kind may perform them.
+- `canonical_json.py` — deterministic JSON serialization (sorted keys, no NaN) used to compute `parametersHash`; the agent must echo this hash back at `execution/start`, so any parameter drift between ticket-approval-time and execution-time is rejected with 409.
+- `service.py` — business rules layered over the repo + status machine (approver ≠ proposer, no duplicate approvals, hash-mismatch handling, idempotent agent-side create, supersede semantics).
+
+**Tickets are event-sourced.** A ticket is a fold over its `AuditEvent` log. `apply_event()` in `backend/app/repo/base.py` is the *one* fold implementation shared by every storage backend, and it only ever touches `MUTABLE_FIELDS` — that's what makes immutability structural rather than convention. Any new mutation must go through `repo.append_event`, never direct field assignment.
+
+### Repository layer (`backend/app/repo/`)
+`base.py` defines `TicketRepository` (ABC) deliberately shaped like DynamoDB single-table access patterns (get-by-id, query-by-status, lineage query, CAS append via expected `seq`) so swapping backends is a config change, not a rewrite. `factory.py` picks the implementation from `STORE_BACKEND` (`lru_cache`d singleton):
+- `jsonl` (MVP default) — append-only log on the PVC, folded into memory at boot, single `asyncio.Lock` writer, fsync on approval/execution events, torn-final-line recovery.
+- `dynamodb` — `dynamodb_store.py`, currently a documented stub (`PK=TICKET#id / SK=META|EVENT#seq`, GSI1 status, GSI2 lineage, GSI3 idempotency; `append_event` via `TransactWriteItems` conditional on `seq`).
+- `s3` — `s3_store.py`, currently a documented stub (Object Lock / WORM, one immutable object per event, CAS via conditional `PutObject`).
+
+### Two independent auth paths — do not couple them
+- **Human** (`backend/app/api/auth.py`, `backend/app/auth/rbac.py`): server-side OIDC Authorization Code flow via Authlib, httpOnly session cookie. The provider is built entirely from env (`OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`/`OIDC_SCOPES`/`OIDC_GROUPS_CLAIM`) so swapping IAM Identity Center for Azure AD/Entra ID is a config-only change — never hardcode a provider-specific assumption here. `APPROVER_EMAILS` is a fallback allowlist because Identity Center's group claims are weak.
+- **Agent** (`backend/app/auth/agent_auth.py`, `replay_cache.py`): verifies a presigned `sts:GetCallerIdentity` request (Vault/aws-iam-authenticator pattern) carried in the `X-Gate-Identity` header — validates host/body/date window, checks `X-Gate-Server-Id` is in `SignedHeaders`, checks a replay cache, forwards to STS, and matches the resulting ARN against `ALLOWED_AGENT_ARNS` globs. The gate itself needs **no** AWS permissions to do this verification. This path must stay untouched by any future human-IdP migration.
+
+### API surface
+- `backend/app/api/agent_tickets.py` — SigV4-only routes: create (idempotent), poll, `execution/start` (hash echo), `execution/result`.
+- `backend/app/api/tickets.py` — session-only routes: list/filter, detail (ticket + lineage + audit events), approve, reject, supersede.
+- `backend/app/api/errors.py` — maps the `ServiceError`/`RepoError` hierarchy to `{"error": {"code","message"}}`.
+- `backend/app/api/middleware.py` — access logging + a dependency-free sliding-window rate limiter on `/api/agent/*`.
+- `backend/app/jobs/expiry.py` — background sweep (started from `main.py`'s lifespan) that expires stale `PENDING_APPROVAL`/`APPROVED` tickets per `APPROVAL_TTL_HOURS`.
+- `backend/app/notifications/ses.py` — fire-and-forget SES email on ticket creation; never raises into the request path.
+
+### Frontend (`frontend/src/`)
+React 19 + Vite + TypeScript strict, shadcn/ui + Tailwind, brand tokens mirrored from the internal `gammon-powershell-portal` project. `lib/api.ts` is a typed fetch wrapper that redirects to `/login` on 401. TanStack Query drives polling on ticket lists/detail (`refetchInterval`), which stops once a ticket reaches a terminal status. `routes/` are the pages (dashboard, tickets list, ticket detail, login); `components/tickets/` holds the ticket-specific UI (status badge, lineage chain, audit timeline, approve/reject with confirm dialogs, supersede dialog via react-hook-form + zod); `components/ui/` are the shadcn primitives.
+
+### Settings (`backend/app/settings.py`)
+Everything is `pydantic-settings`, validated at import time — invalid/missing env crashes at boot rather than on first request. Cross-field checks enforce e.g. `AUTH_MODE=dev` never in `ENV=production`, `STORE_BACKEND=dynamodb` requires `DYNAMODB_TABLE`, `STORE_BACKEND=s3` requires `S3_BUCKET`. `.env.example` documents every scenario (dev vs oidc, each OIDC provider, each store backend) as commented-out alternatives — keep it in sync when adding new env vars.
+
+### Deployment (`deploy/k8s/`)
+Single replica, `strategy: Recreate` (RWO PVC + single-writer JSONL store), IRSA ServiceAccount, `/api/healthz` probes, TLS-mandatory Ingress (SigV4 identity headers must never traverse plaintext).
+
+## Key invariants to preserve
+
+- Never mutate a `Ticket` field outside `apply_event`/`MUTABLE_FIELDS` — that's the whole immutability guarantee.
+- Never let the human-auth and agent-auth code paths depend on each other.
+- `parametersHash` must be computed by the gate (not trusted from the agent) and echoed back at execution start.
+- Keep `.env.example` and `docs/plan.md`'s decision log updated when settings or architecture change.

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /mnt/c/Users/LiamNg/Documents/GitHub/mcp-approval-gate status --short)"
+    ]
+  }
+}

@@ -103,3 +103,211 @@ create (with `resourceArns` + `tags`) → poll 15–30 s → on APPROVED: `execu
 - 2026-08-02 — Phase 5 done. Pages: dashboard (status cards + recent), tickets (Active/History tabs, tag filter, 10 s polling on active), detail (lineage chain, hash-locked parameters view, audit timeline, approve/reject with confirm dialogs + interlock, supersede via react-hook-form+zod). TanStack Query `refetchInterval` stops on terminal statuses. Approve/reject buttons self-hide for proposer/duplicate-approver/viewer (server still enforces). SPA served by FastAPI with index.html fallback (verified).
 - 2026-08-02 — Phases 3–4 done. Agent auth rejects pre-STS on envelope problems (wrong host, unsigned server-id, stale date, replay) so STS is only called for plausible requests. Role is resolved at login and stored in the session (role changes need re-login). AUTH_MODE=dev provides local fake login; settings validation refuses it in production. `/api/me`, list filters (status/assignee/tag), audit trail verified by tests (53 passing).
 - 2026-08-02 — Phases 1–2 done. Fold lives in `repo/base.py:apply_event` and only touches `MUTABLE_FIELDS`, making immutability structural. JSONL store repairs a torn supersede pair on boot by reverting the orphaned DEPRECATED (same rule the future S3 store needs). Approval events: `APPROVAL_ADDED` below threshold, `APPROVED` at threshold; both carry `details.approval`.
+
+## Detailed Design
+
+> As-built reference. This section supersedes the original Next.js-era `plan.md`
+> at the repo root (kept only for history) — everything below reflects the
+> actual React + FastAPI implementation.
+
+### Directory structure
+
+```
+backend/
+  app/
+    main.py                 # create_app(): routers, lifespan (expiry sweep), SPA mount, /api/healthz
+    settings.py              # pydantic-settings; validated at import, crashes at boot on bad env
+    api/
+      auth.py                 # Authlib OIDC login/callback/logout, dev_login, /api/me, require_session/require_approver
+      agent_tickets.py        # POST /api/agent/tickets, GET /{id}, POST .../execution/start|result
+      tickets.py               # GET /api/tickets, GET /{id}, POST .../approve|reject|supersede
+      deps.py                  # get_repo() dependency
+      errors.py                # ServiceError/RepoError -> {"error": {"code","message"}}
+      middleware.py            # access logging + sliding-window rate limit on /api/agent/*
+    core/
+      models.py                # Ticket, ActionDetails, Approval, Execution, Actor, AuditEvent, MUTABLE_FIELDS
+      schemas.py                # request/response models (TicketCreateRequest, AgentPollResponse, ...)
+      status_machine.py         # _ALLOWED transition table, can_transition/assert_transition
+      canonical_json.py          # canonicalize() + parameters_hash()
+      service.py                 # business rules; every mutation goes through here
+    auth/
+      agent_auth.py              # verify_agent(): presigned-STS SigV4 verification
+      replay_cache.py             # in-memory TTL nonce cache
+      rbac.py                     # groups claim / APPROVER_EMAILS -> approver|viewer
+    repo/
+      base.py                     # TicketRepository ABC + shared apply_event() fold
+      jsonl_store.py                # MVP backend
+      dynamodb_store.py             # documented stub
+      s3_store.py                    # documented stub
+      factory.py                     # get_repository() switches on STORE_BACKEND
+    notifications/ses.py           # fire-and-forget SES email on TICKET_CREATED
+    jobs/expiry.py                 # sweep_once()/run_expiry_loop(): TTL -> EXPIRED
+  tests/                            # pytest, asyncio_mode=auto (backend/pyproject.toml)
+frontend/
+  src/
+    App.tsx, main.tsx                # react-router shell, QueryClientProvider, Toaster
+    routes/                          # login, dashboard, tickets, ticket-detail
+    components/layout/                # sidebar, header
+    components/tickets/                # ticket-table, ticket-columns, ticket-status-badge,
+                                        # lineage-chain, audit-timeline, approve-reject-actions, supersede-dialog
+    components/ui/                     # shadcn primitives
+    lib/api.ts, lib/types.ts            # fetch wrapper (401 -> /login), TS mirrors of the Pydantic models
+    index.css                           # portal HSL brand vars + success/warning/info
+docs/agent-contract.md                # MCP-server integration contract
+deploy/k8s/                           # namespace, deployment, service, ingress, serviceaccount, pvc, configmap, secret
+scripts/agent_flow_demo.py             # live E2E demo: create -> poll -> start -> result
+Dockerfile                             # node:20-alpine build stage -> python:3.12-slim runtime
+```
+
+### Data model (`backend/app/core/models.py`)
+
+All API models inherit `ApiModel` (`alias_generator=to_camel, populate_by_name=True`), so the wire format is camelCase while Python stays snake_case.
+
+```python
+TicketStatus = Literal["PENDING_APPROVAL","APPROVED","REJECTED","DEPRECATED",
+                        "EXPIRED","EXECUTING","COMPLETED","FAILED"]
+TERMINAL_STATUSES = {"REJECTED","DEPRECATED","EXPIRED","COMPLETED","FAILED"}
+
+class ActionDetails(ApiModel):
+    service: Literal["ec2"]              # v1 scope
+    operation: str                       # AWS API name, e.g. "RunInstances"
+    region: str
+    parameters: dict[str, Any]           # exact intended SDK params
+    parameters_hash: str = ""            # sha256 of canonical JSON, computed BY THE GATE
+    resource_arns: list[str] = []        # specific ARNs/ids targeted; empty only for pure-creation ops
+    reason: str | None = None
+
+class Approval(ApiModel):
+    approved_by: str
+    approved_at: datetime
+
+class Execution(ApiModel):
+    started_at: datetime
+    finished_at: datetime | None = None
+    outcome: Literal["success","failure"] | None = None
+    message: str | None = None
+    aws_request_ids: list[str] = []
+
+class Actor(ApiModel):
+    kind: Literal["agent","human","system"]
+    id: str                              # IAM ARN | email | "gate"
+
+class Ticket(ApiModel):
+    ticket_id: str                       # ULID
+    subject: str
+    ticket_date: datetime                # set by the gate at creation
+    status: TicketStatus
+    planned_date: date
+    planned_action: str                  # human-readable summary
+    action_details: ActionDetails
+    tags: dict[str, str] = {}            # management tags; filterable, propagated to AWS resources
+    assignee: str                        # VERIFIED agent IAM ARN from STS — never client-supplied
+    proposed_by: str                     # = assignee (agent-created) or human email (supersede)
+    approvals: list[Approval] = []       # status -> APPROVED at REQUIRED_APPROVALS
+    rejected_by: str | None = None
+    rejected_at: datetime | None = None
+    rejection_reason: str | None = None
+    supersedes: str | None = None
+    superseded_by: str | None = None
+    lineage_root_id: str                 # first ticket in the chain (= own id if original)
+    idempotency_key: str | None = None
+    execution: Execution | None = None
+    seq: int = 0                         # event count; optimistic-concurrency token (CAS)
+
+# The only fields an AuditEvent fold may change. Everything else is frozen.
+MUTABLE_FIELDS = frozenset({"status","approvals","rejected_by","rejected_at",
+                             "rejection_reason","superseded_by","execution","seq"})
+
+class AuditEvent(ApiModel):
+    event_id: str; ticket_id: str; seq: int; timestamp: datetime
+    type: Literal["TICKET_CREATED","APPROVAL_ADDED","APPROVED","REJECTED","DEPRECATED",
+                  "EXPIRED","EXECUTION_STARTED","EXECUTION_COMPLETED","EXECUTION_FAILED"]
+    actor: Actor
+    from_status: TicketStatus | None = None
+    to_status: TicketStatus | None = None
+    details: dict[str, Any] | None = None
+```
+
+**Immutability**: every change is an appended `AuditEvent`; a ticket is a fold over its events (`repo/base.py:apply_event`). The fold only ever assigns `MUTABLE_FIELDS` — frozen fields (subject, `actionDetails`, `plannedDate`, tags, …) structurally cannot change; editing requires a superseding ticket.
+
+### Transitions (`backend/app/core/status_machine.py:_ALLOWED`)
+
+| From | To | Actor kind / guard |
+|---|---|---|
+| PENDING_APPROVAL | PENDING_APPROVAL (`APPROVAL_ADDED`) | human; approver ≠ proposer, not already approved by them, count < required |
+| PENDING_APPROVAL | APPROVED (`APPROVED`) | human; same guard, approvals reach `REQUIRED_APPROVALS` |
+| PENDING_APPROVAL | REJECTED | human; approver ≠ proposer, reason required (min 5 chars) |
+| PENDING_APPROVAL / APPROVED | DEPRECATED | human, via supersede |
+| PENDING_APPROVAL / APPROVED | EXPIRED | system sweep (`APPROVAL_TTL_HOURS`) |
+| APPROVED | EXECUTING | agent; caller ARN == assignee, `parametersHash` echo matches |
+| EXECUTING | COMPLETED / FAILED | agent; caller ARN == assignee |
+
+Structural (from, to, actor-kind) rules live in `status_machine.py`; identity rules that need request context (approver ≠ proposer, caller ARN == assignee, etc.) live in `core/service.py`, which always calls `assert_transition` first.
+
+### Repository (`backend/app/repo/base.py`)
+
+```python
+class TicketRepository(ABC):
+    async def create_ticket(ticket: Ticket, created: AuditEvent) -> None            # DuplicateError on id/idempotency collision
+    async def get_ticket(ticket_id: str) -> Ticket | None
+    async def find_by_idempotency_key(assignee_arn: str, key: str) -> Ticket | None
+    async def query_by_status(status: TicketStatus, limit=50, cursor=None) -> Page
+    async def query_all(limit=50, cursor=None) -> Page
+    async def query_lineage(lineage_root_id: str) -> list[Ticket]                    # oldest first
+    async def list_audit_events(ticket_id: str) -> list[AuditEvent]
+    async def append_event(ticket_id: str, expected_seq: int, event: AuditEvent) -> Ticket  # CAS -> ConflictError (409)
+    async def transact_supersede(old_ticket_id, expected_seq, deprecated_event,
+                                  new_ticket, created_event) -> None                  # atomic
+```
+
+Shaped like DynamoDB single-table access patterns so a backend swap is config-only:
+- **jsonl** (MVP, `factory.py` default): one `AuditEvent` per line in `$DATA_DIR/tickets.jsonl`; boot-time fold into an in-memory dict + indexes (by-status, by-lineage-root, by-idempotency-key); single `asyncio.Lock` writer; fsync on approval/execution events; a torn final line is detected and skipped on replay; a torn `transact_supersede` pair (crash between the two writes) is repaired on boot by reverting the orphaned `DEPRECATED`.
+- **dynamodb**: single table `PK=TICKET#id / SK=META|EVENT#seq`; GSI1 `STATUS#status/ticketDate`; GSI2 `LINEAGE#rootId`; GSI3 `IDEM#arn#key`. `append_event` → `TransactWriteItems` with `ConditionExpression seq = :expected`.
+- **s3** (compliance/WORM): each `AuditEvent` is an immutable object `tickets/{id}/events/{seq:06d}.json` in a versioned, **Object Lock**-enabled bucket; CAS via conditional `PutObject` (`If-None-Match: *`); same fold code as jsonl. Optional middle ground: DynamoDB as the operational store, dual-write audit events to the Object Lock bucket (`AUDIT_MIRROR_S3_BUCKET`) for compliance-grade retention without S3's query limitations.
+
+### Auth
+
+**Human** (`backend/app/api/auth.py`, `backend/app/auth/rbac.py`) — Authlib server-side Authorization Code flow; the SPA never touches tokens. Provider built entirely from env (`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_SCOPES`, `OIDC_GROUPS_CLAIM`) — migrating IAM Identity Center → Entra ID is an env-only change. `rbac.py` maps the groups claim → `approver|viewer` via `OIDC_APPROVER_GROUPS`, with an `APPROVER_EMAILS` allowlist fallback (Identity Center's OIDC group-claim support is weak). Role is resolved at login and cached in the session cookie (role changes require re-login). `AUTH_MODE=dev` provides `GET /api/auth/login?email=&role=` for local dev; refused by `settings.py` when `ENV=production`.
+
+**Agent** (`backend/app/auth/agent_auth.py:verify_agent`) — presigned `sts:GetCallerIdentity` (Vault / aws-iam-authenticator pattern), carried base64-encoded in `X-Gate-Identity`:
+1. Decode the envelope; reject unless method/scheme/host match `POST https://sts(.<region>)?.amazonaws.com` and the body is exactly `Action=GetCallerIdentity&Version=2011-06-15`.
+2. Reject unless `X-Amz-Date` is within ±300s of now.
+3. Reject unless `X-Gate-Server-Id` header equals `GATE_SERVER_ID` **and** is present in the signature's `SignedHeaders` (binds the signature to this gate — a token captured for another service can't be replayed here).
+4. Reject if `sha256(Signature)` is already in the in-memory replay cache (else add it).
+5. Forward the request verbatim to STS via httpx (the gate needs no STS permission of its own); parse `Arn`/`Account` from the response.
+6. Normalize an assumed-role ARN to its IAM role ARN and check both forms against `ALLOWED_AGENT_ARNS` glob patterns (`fnmatch`); 403 if neither matches.
+
+The verified ARN becomes `assignee`/`proposedBy` on created tickets and must match on every subsequent agent call for that ticket.
+
+### API surface
+
+Agent (`X-Gate-Identity`, prefix `/api/agent/tickets`): `POST ""` (idempotent create via `Idempotency-Key` header; 201, or 200 on replay) · `GET /{id}` (poll; assignee-only; response includes `supersededBy` so a deprecated ticket's poller can follow the chain) · `POST /{id}/execution/start` (body `{parametersHash}`; 409 `HASH_MISMATCH` on drift; response echoes the approved `actionDetails` — the agent must execute exactly this, not local memory) · `POST /{id}/execution/result` (`{outcome, message?, awsRequestIds?}`).
+
+Human (session cookie, prefix `/api/tickets`): `GET ""` (filter by `status`/`assignee`/`tag=key=value`, cursor pagination) · `GET /{id}` (`{ticket, lineage[], auditEvents[]}`) · `POST /{id}/approve` (approver role; rejects proposer/duplicate approver; CAS on `seq` → 409 on a concurrent-approval race) · `POST /{id}/reject` (`{reason}`, min 5 chars) · `POST /{id}/supersede` (body = a new `TicketCreateRequest`; atomically deprecates the old ticket and creates the successor with `supersedes`/`lineageRootId` set and `proposedBy` = the editing human — who therefore can't also approve their own superseding ticket). Plus `GET /api/me` and public `GET /api/healthz`.
+
+Every mutation is Pydantic-validated and appends its `AuditEvent` through `service.py` → `repo.append_event`/`transact_supersede`; errors surface as `{"error": {"code", "message"}}` via `api/errors.py`.
+
+### Notifications & expiry
+
+`notifications/ses.py:notify_ticket_created` — fire-and-forget (`asyncio.create_task`, boto3 SESv2 via `to_thread`), never raises into the request path; gated by `NOTIFY_ON_CREATE`/`SES_FROM_ADDRESS`/`SES_REGION`.
+
+`jobs/expiry.py` — runs every 10 minutes from the FastAPI `lifespan`. `APPROVED` tickets expire `APPROVAL_TTL_HOURS` after their **last approval**; `PENDING_APPROVAL` tickets expire that many hours after `ticketDate`. `EXECUTING` and terminal tickets are never swept. A `ConflictError` from a concurrent transition is swallowed (the ticket moved on its own before the sweep reached it).
+
+### UI (mirrors `gammon-powershell-portal`)
+
+Brand tokens copied into `frontend/src/index.css` (navy `--primary: 217 49% 36%`, red `--secondary: 0 85% 49%`, `.section-title`) plus added `--success/--warning/--info`. Pages: dashboard (status-count cards + recent tickets), tickets (Active/History tabs, tag filter, 10s polling on active), ticket detail (lineage chain, hash-locked parameters view, audit timeline, approve/reject with confirm dialogs, supersede via react-hook-form + zod). TanStack Query `refetchInterval` stops once a ticket/list only contains terminal statuses. Approve/reject controls self-hide for the proposer/a duplicate approver/a viewer as a UX nicety — the server enforces all of it regardless (`tickets.py`, `service.py`).
+
+### MCP-server contract (`docs/agent-contract.md`)
+
+1. Build exact `actionDetails` (including `resourceArns` for every targeted resource and management `tags`) → `POST /api/agent/tickets` with an `Idempotency-Key`; surface the ticket URL to the operator. Read-only `Describe*` calls bypass the gate entirely.
+2. Poll every 15–30s (jittered) until `APPROVED` (proceed), `REJECTED`/`EXPIRED` (stop, surface the reason), or `DEPRECATED` (follow `supersededBy` and re-confirm).
+3. `execution/start` echoing `parametersHash`; execute using the `actionDetails` from *that* response; propagate `tags` + a `gateTicketId=<ticketId>` tag onto the AWS resources where the operation supports tagging.
+4. Report the result with AWS RequestIds via `execution/result`.
+5. Recommended hard enforcement (owned by the agent-role admin, not this gate): an IAM condition requiring `aws:RequestTag/gateTicketId` on mutating EC2 actions so an ungated call fails at IAM regardless of what the gate says; scope the agent role's `Resource`/ABAC condition to the ticket's `resourceArns`.
+
+### Deployment specifics
+
+`Dockerfile` — stage 1 `node:20-alpine` (`npm ci && vite build`); stage 2 `python:3.12-slim`, deps installed from `backend/requirements.txt` (cached layer, see Decision log), non-root `1001:1001`, `uvicorn app.main:app` on `:8000`.
+
+`deploy/k8s/deployment.yaml` — `replicas: 1` with `strategy: Recreate` is **required** while `STORE_BACKEND=jsonl` (RWO PVC, single-writer store, in-memory replay cache); scale out only after moving to DynamoDB + a shared replay cache. `runAsNonRoot`/`fsGroup: 1001`, readiness/liveness on `/api/healthz`, env from a ConfigMap + Secret. Other manifests: `namespace.yaml`, `pvc.yaml` (1Gi RWO), `serviceaccount.yaml` (IRSA annotation), `service.yaml` (ClusterIP), `ingress.yaml` (ALB, TLS mandatory — SigV4 identity headers must never traverse plaintext), `secret.yaml` (template only; recommend External/Sealed Secrets for `SESSION_SECRET`/`OIDC_CLIENT_SECRET`).
+

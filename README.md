@@ -9,15 +9,15 @@ report the result.
 - **Immutable tickets** — every change is an appended audit event; editing a
   submitted ticket creates a *superseding* ticket and marks the original
   `DEPRECATED`, preserving the full lineage.
-- **Human auth**: provider-agnostic OIDC (IAM Identity Center today, Azure AD /
-  Entra ID later — config change only).
+- **Human auth**: provider-agnostic OIDC (IAM Identity Center or Entra ID).
 - **Agent auth**: IAM SigV4 via presigned `sts:GetCallerIdentity` — no shared
-  secrets; the ticket's assignee is the agent's *verified* role ARN.
-- **Approval rules**: 1 or 2 required approvals (`REQUIRED_APPROVALS`),
+  secrets.
+- **Approval rules**: 1 or 2 required approvals,
   approvers must be distinct and never the proposer.
 - **Storage**: JSONL append-log on a PVC (MVP) behind a repository interface
-  shaped for **DynamoDB** or **S3 + Object Lock (WORM)** — swap via
-  `STORE_BACKEND`.
+  shaped for **DynamoDB** or **S3 + Object Lock (WORM)**.
+
+Note that this is a monolithic design as MVP project.
 
 See [docs/plan.md](docs/plan.md) (living plan) and
 [docs/agent-contract.md](docs/agent-contract.md) (MCP-server integration).
