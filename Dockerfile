@@ -10,11 +10,9 @@ RUN npm run build
 FROM python:3.12-slim AS runtime
 WORKDIR /srv
 
-COPY backend/pyproject.toml ./
-RUN pip install --no-cache-dir \
-    "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
-    "pydantic-settings>=2.3" "authlib>=1.3" "itsdangerous>=2.2" \
-    "httpx>=0.27" "boto3>=1.34" "python-ulid>=2.6"
+# Copy only the requirements first so this layer is cached until deps change.
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
 COPY --from=frontend /build/dist ./static
