@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Brand palette copied from gammon-powershell-portal (navy primary, red
+   secondary), extended with success/warning/info for ticket status badges. */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 217 49% 36%;
+    --card: 0 0% 100%;
+    --card-foreground: 217 49% 36%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 217 49% 36%;
+    --primary: 217 49% 36%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 85% 49%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 217 49% 95%;
+    --muted-foreground: 217 49% 45%;
+    --accent: 217 49% 95%;
+    --accent-foreground: 217 49% 36%;
+    --destructive: 0 85% 49%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 142 71% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 40%;
+    --warning-foreground: 0 0% 100%;
+    --info: 199 89% 38%;
+    --info-foreground: 0 0% 100%;
+    --border: 217 49% 90%;
+    --input: 217 49% 90%;
+    --ring: 217 49% 36%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 217 49% 10%;
+    --foreground: 0 0% 95%;
+    --card: 217 49% 15%;
+    --card-foreground: 0 0% 95%;
+    --popover: 217 49% 15%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 217 49% 36%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 85% 49%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 217 49% 20%;
+    --muted-foreground: 217 49% 70%;
+    --accent: 217 49% 25%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 85% 49%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 142 71% 40%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 217 49% 10%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    --border: 217 49% 25%;
+    --input: 217 49% 25%;
+    --ring: 217 49% 36%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  pre,
+  code {
+    @apply font-mono text-sm;
+  }
+
+  .section-title {
+    @apply text-2xl font-bold text-primary text-center relative pb-6;
+  }
+
+  .section-title::after {
+    content: "";
+    @apply absolute bottom-0 left-1/2 w-16 h-1 bg-secondary -translate-x-1/2;
+  }
+}
