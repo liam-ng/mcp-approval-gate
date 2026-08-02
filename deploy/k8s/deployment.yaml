@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-approval-gate
+  namespace: mcp-approval-gate
+  labels:
+    app: mcp-approval-gate
+spec:
+  # Single replica is REQUIRED with STORE_BACKEND=jsonl (RWO PVC, single-writer
+  # store, in-memory replay cache). Recreate prevents two pods double-mounting
+  # during a rollout. Scale out only after moving to DynamoDB + shared cache.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mcp-approval-gate
+  template:
+    metadata:
+      labels:
+        app: mcp-approval-gate
+    spec:
+      serviceAccountName: mcp-approval-gate
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: gate
+          image: REGISTRY/mcp-approval-gate:latest # set by CI
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: mcp-approval-gate
+            - secretRef:
+                name: mcp-approval-gate
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mcp-approval-gate-data

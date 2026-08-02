@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-approval-gate
+  namespace: mcp-approval-gate
+  annotations:
+    # Adjust to the cluster's ingress controller (ALB shown; use nginx class +
+    # cert-manager annotations if that's the cluster convention).
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT_ID:certificate/CERT_ID
+spec:
+  ingressClassName: alb
+  # TLS is mandatory: agent identity headers and session cookies must never
+  # traverse plaintext.
+  rules:
+    - host: approval-gate.internal.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-approval-gate
+                port:
+                  number: 80

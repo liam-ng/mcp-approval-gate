@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-approval-gate-data
+  namespace: mcp-approval-gate
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # Uses the cluster default StorageClass (gp3 on EKS). The JSONL audit log
+  # lives here — schedule EBS/Velero snapshots, or move to STORE_BACKEND=
+  # dynamodb|s3 for managed durability.
