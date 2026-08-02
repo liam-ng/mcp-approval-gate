@@ -10,7 +10,7 @@
 - [x] Phase 2 — Repository layer (ABC + JSONL store + factory)
 - [x] Phase 3 — Agent API (SigV4 auth + create/poll/start/result routes)
 - [x] Phase 4 — Human auth + API (OIDC, RBAC, ticket routes, SES notifier)
-- [ ] Phase 5 — Frontend (React SPA mirroring gammon-powershell-portal UI)
+- [x] Phase 5 — Frontend (React SPA mirroring gammon-powershell-portal UI)
 - [ ] Phase 6 — Packaging + docs (Dockerfile, k8s manifests, agent contract)
 - [ ] Phase 7 — Hardening (expiry sweep, structured logging, rate limiting)
 
@@ -98,5 +98,6 @@ create (with `resourceArns` + `tags`) → poll 15–30 s → on APPROVED: `execu
 ## Decision log
 
 - 2026-08-02 — Plan approved. Stack: React (Vite) + FastAPI (user preference; boto3/Pydantic fit, MCP ecosystem is Python). S3 Object Lock added as storage option; tags + resourceArns added to ticket model.
+- 2026-08-02 — Phase 5 done. Pages: dashboard (status cards + recent), tickets (Active/History tabs, tag filter, 10 s polling on active), detail (lineage chain, hash-locked parameters view, audit timeline, approve/reject with confirm dialogs + interlock, supersede via react-hook-form+zod). TanStack Query `refetchInterval` stops on terminal statuses. Approve/reject buttons self-hide for proposer/duplicate-approver/viewer (server still enforces). SPA served by FastAPI with index.html fallback (verified).
 - 2026-08-02 — Phases 3–4 done. Agent auth rejects pre-STS on envelope problems (wrong host, unsigned server-id, stale date, replay) so STS is only called for plausible requests. Role is resolved at login and stored in the session (role changes need re-login). AUTH_MODE=dev provides local fake login; settings validation refuses it in production. `/api/me`, list filters (status/assignee/tag), audit trail verified by tests (53 passing).
 - 2026-08-02 — Phases 1–2 done. Fold lives in `repo/base.py:apply_event` and only touches `MUTABLE_FIELDS`, making immutability structural. JSONL store repairs a torn supersede pair on boot by reverting the orphaned DEPRECATED (same rule the future S3 store needs). Approval events: `APPROVAL_ADDED` below threshold, `APPROVED` at threshold; both carry `details.approval`.
