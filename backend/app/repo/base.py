@@ -90,6 +90,10 @@ def apply_event(ticket: Ticket, event: AuditEvent) -> Ticket:
                 "aws_request_ids": details.get("awsRequestIds", []),
             }
         )
+    elif event.type == "TAGS_UPDATED":
+        updates["tags"] = details["tags"]
+    elif event.type == "COMMENT_ADDED":
+        pass  # discussion only; no Ticket field changes, just the seq bump above
     elif event.type == "TICKET_CREATED":
         raise ConflictError(f"duplicate TICKET_CREATED for {ticket.ticket_id}")
     else:  # pragma: no cover - exhaustive over AuditEventType

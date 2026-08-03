@@ -10,6 +10,15 @@ from pydantic import Field, field_validator
 from app.core.models import ActionDetails, ApiModel, AuditEvent, Ticket, TicketStatus
 
 
+def _validate_tag_limits(v: dict[str, str]) -> dict[str, str]:
+    if len(v) > 20:
+        raise ValueError("at most 20 tags")
+    for key, value in v.items():
+        if not key or len(key) > 64 or len(value) > 256:
+            raise ValueError("tag keys must be 1-64 chars, values at most 256")
+    return v
+
+
 class ActionDetailsIn(ApiModel):
     """Client-supplied action details — the gate computes parametersHash."""
 
@@ -31,12 +40,20 @@ class TicketCreateRequest(ApiModel):
     @field_validator("tags")
     @classmethod
     def _tag_limits(cls, v: dict[str, str]) -> dict[str, str]:
-        if len(v) > 20:
-            raise ValueError("at most 20 tags")
-        for key, value in v.items():
-            if not key or len(key) > 64 or len(value) > 256:
-                raise ValueError("tag keys must be 1-64 chars, values at most 256")
-        return v
+        return _validate_tag_limits(v)
+
+
+class TagsUpdateRequest(ApiModel):
+    """Change a ticket's tags without superseding it (recorded as a TAGS_UPDATED
+    audit event, not a new ticket) — tags are metadata, not part of the
+    hash-locked action, so this doesn't touch the approval-integrity surface."""
+
+    tags: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("tags")
+    @classmethod
+    def _tag_limits(cls, v: dict[str, str]) -> dict[str, str]:
+        return _validate_tag_limits(v)
 
 
 class AgentPollResponse(ApiModel):
@@ -68,6 +85,10 @@ class RejectRequest(ApiModel):
     reason: str = Field(min_length=5, max_length=1000)
 
 
+class CommentCreateRequest(ApiModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class TicketDetailResponse(ApiModel):
     ticket: Ticket
     lineage: list[Ticket]
@@ -83,3 +104,7 @@ class MeResponse(ApiModel):
     email: str
     name: str | None = None
     role: Literal["approver", "viewer"]
+    # Lets the frontend compute a ticket's "approval due" date itself
+    # (createdAt/lastApproval + this), mirroring app/jobs/expiry.py's own
+    # cutoff, without a separate config round trip.
+    approval_ttl_hours: int

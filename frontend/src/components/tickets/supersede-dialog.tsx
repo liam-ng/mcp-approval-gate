@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError } from "@/lib/api"
+import { formatResourceScopeSummary, summarizeResourceScope } from "@/lib/resource-scope"
 import type { Ticket } from "@/lib/types"
 
 const schema = z.object({
@@ -88,6 +89,23 @@ export function SupersedeDialog({ ticket }: { ticket: Ticket }) {
 
   const errors = form.formState.errors
 
+  // Live preview: operation/resourceArns are fixed (not editable here), only
+  // parameters can change, so re-derive the scope summary as the user types.
+  const watchedParameters = form.watch("parameters")
+  let scopeSummary: string | null = null
+  try {
+    scopeSummary = formatResourceScopeSummary(
+      summarizeResourceScope({
+        service: ticket.actionDetails.service,
+        operation: ticket.actionDetails.operation,
+        parameters: JSON.parse(watchedParameters),
+        resourceArns: ticket.actionDetails.resourceArns,
+      }),
+    )
+  } catch {
+    scopeSummary = null // invalid JSON mid-edit; parameters' own error already shows
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -131,6 +149,14 @@ export function SupersedeDialog({ ticket }: { ticket: Ticket }) {
             </div>
           </div>
           <div className="space-y-2">
+            <Label htmlFor="reason">Reason for changes</Label>
+            <Textarea
+              id="reason"
+              {...form.register("reason")}
+              placeholder="Why is the original ticket being replaced?"
+            />
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="plannedAction">Planned action (summary)</Label>
             <Textarea id="plannedAction" {...form.register("plannedAction")} />
             {errors.plannedAction && (
@@ -138,15 +164,15 @@ export function SupersedeDialog({ ticket }: { ticket: Ticket }) {
             )}
           </div>
           <div className="space-y-2">
+            <Label>Resources in scope</Label>
+            <p className="text-sm text-muted-foreground">{scopeSummary ?? "—"}</p>
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="parameters">Action parameters (JSON)</Label>
             <Textarea id="parameters" className="min-h-32 font-mono text-xs" {...form.register("parameters")} />
             {errors.parameters && (
               <p className="text-xs text-destructive">{errors.parameters.message}</p>
             )}
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="reason">Reason for change</Label>
-            <Input id="reason" {...form.register("reason")} placeholder="Why is the original ticket being replaced?" />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

@@ -114,6 +114,11 @@ def test_create_ticket_success(client, respx_mock):
     assert ticket["status"] == "PENDING_APPROVAL"
     assert len(ticket["actionDetails"]["parametersHash"]) == 64
     assert ticket["lineageRootId"] == ticket["ticketId"]
+    # gateTicketId/owner are gate-assigned default tags on every ticket, not
+    # just ones the caller happened to set (see create_payload's "team" tag).
+    assert ticket["tags"]["gateTicketId"] == ticket["ticketId"]
+    assert ticket["tags"]["owner"] == ROLE_ARN
+    assert ticket["tags"]["team"] == "gti"
 
 
 @respx.mock

@@ -16,7 +16,9 @@ from app.api.deps import get_repo
 from app.core import service
 from app.core.models import Ticket, TicketStatus
 from app.core.schemas import (
+    CommentCreateRequest,
     RejectRequest,
+    TagsUpdateRequest,
     TicketCreateRequest,
     TicketDetailResponse,
     TicketListResponse,
@@ -80,3 +82,13 @@ async def reject(ticket_id: str, payload: RejectRequest, user: Approver, repo: R
 @router.post("/{ticket_id}/supersede", response_model=Ticket, response_model_by_alias=True)
 async def supersede(ticket_id: str, payload: TicketCreateRequest, user: User, repo: Repo):
     return await service.supersede_ticket(repo, ticket_id, user.email, payload)
+
+
+@router.post("/{ticket_id}/tags", response_model=Ticket, response_model_by_alias=True)
+async def update_tags(ticket_id: str, payload: TagsUpdateRequest, user: User, repo: Repo):
+    return await service.update_tags(repo, ticket_id, user.email, payload.tags)
+
+
+@router.post("/{ticket_id}/comments", response_model=Ticket, response_model_by_alias=True)
+async def add_comment(ticket_id: str, payload: CommentCreateRequest, user: User, repo: Repo):
+    return await service.add_comment(repo, ticket_id, user.email, payload.text)

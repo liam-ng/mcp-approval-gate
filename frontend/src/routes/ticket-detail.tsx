@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { format } from "date-fns"
+import { addHours, format } from "date-fns"
 import { ArrowLeft } from "lucide-react"
 import { Link, useParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
@@ -9,10 +9,13 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApproveRejectActions } from "@/components/tickets/approve-reject-actions"
 import { AuditTimeline } from "@/components/tickets/audit-timeline"
+import { CommentForm } from "@/components/tickets/comment-form"
 import { LineageChain } from "@/components/tickets/lineage-chain"
 import { SupersedeDialog } from "@/components/tickets/supersede-dialog"
+import { TagsEditor } from "@/components/tickets/tags-editor"
 import { TicketStatusBadge } from "@/components/tickets/ticket-status-badge"
 import { api } from "@/lib/api"
+import { formatResourceScopeSummary, summarizeResourceScope } from "@/lib/resource-scope"
 import { TERMINAL_STATUSES } from "@/lib/types"
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -44,6 +47,20 @@ export default function TicketDetail() {
   }
   const { ticket, lineage, auditEvents } = data
   const d = ticket.actionDetails
+  const scope = summarizeResourceScope(d)
+
+  // Mirrors backend/app/jobs/expiry.py's _expiry_start: the TTL clock starts
+  // at the last approval once APPROVED, otherwise at ticket creation. Only
+  // meaningful pre-expiry, since that's the only sweep this cutoff governs.
+  const approvalDue =
+    me && (ticket.status === "PENDING_APPROVAL" || ticket.status === "APPROVED")
+      ? addHours(
+          ticket.status === "APPROVED" && ticket.approvals.length
+            ? new Date(Math.max(...ticket.approvals.map((a) => new Date(a.approvedAt).getTime())))
+            : new Date(ticket.ticketDate),
+          me.approvalTtlHours,
+        )
+      : null
 
   return (
     <div className="space-y-6">
@@ -74,6 +91,9 @@ export default function TicketDetail() {
               </Field>
               <Field label="Ticket date">{format(new Date(ticket.ticketDate), "yyyy-MM-dd HH:mm:ss")}</Field>
               <Field label="Planned date">{ticket.plannedDate}</Field>
+              {approvalDue && (
+                <Field label="Approval due">{format(approvalDue, "yyyy-MM-dd HH:mm:ss")}</Field>
+              )}
               <Field label="Operation">
                 <span className="font-mono text-xs">
                   {d.service}:{d.operation} ({d.region})
@@ -98,35 +118,35 @@ export default function TicketDetail() {
                   : "—"}
               </Field>
               <Field label="Tags">
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                   {Object.entries(ticket.tags).length
                     ? Object.entries(ticket.tags).map(([k, v]) => (
                         <Badge key={k} variant="outline" className="font-normal">
                           {k}={v}
                         </Badge>
                       ))
-                    : "—"}
+                    : <span className="text-muted-foreground">—</span>}
+                  {me && <TagsEditor ticket={ticket} />}
                 </div>
               </Field>
             </div>
 
             <Separator />
+            {d.reason && <Field label="Reason for changes">{d.reason}</Field>}
             <Field label="Planned action">{ticket.plannedAction}</Field>
-            {d.reason && <Field label="Reason">{d.reason}</Field>}
             <Field label="Resources in scope">
-              {d.resourceArns.length ? (
-                <ul className="space-y-1">
+              <div className="font-medium">{formatResourceScopeSummary(scope)}</div>
+              {d.resourceArns.length > 0 && (
+                <ul className="mt-1 space-y-1">
                   {d.resourceArns.map((arn) => (
-                    <li key={arn} className="font-mono text-xs">
+                    <li key={arn} className="font-mono text-xs text-muted-foreground">
                       {arn}
                     </li>
                   ))}
                 </ul>
-              ) : (
-                <span className="text-muted-foreground">Creates new resources</span>
               )}
             </Field>
-            <Field label="Action parameters (exact, hash-locked)">
+            <Field label="Action parameters (AWS boto3 API call parameters; Hash-locked)">
               <pre className="mt-1 max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 text-xs">
                 {JSON.stringify(d.parameters, null, 2)}
               </pre>
@@ -164,8 +184,14 @@ export default function TicketDetail() {
           <CardHeader>
             <CardTitle>Audit trail</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <AuditTimeline events={auditEvents} />
+            {me && (
+              <>
+                <Separator />
+                <CommentForm ticketId={ticket.ticketId} />
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

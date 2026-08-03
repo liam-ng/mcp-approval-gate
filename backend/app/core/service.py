@@ -101,6 +101,14 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
         resource_arns=payload.action_details.resource_arns,
         reason=payload.action_details.reason,
     )
+    # gateTicketId/owner are default tags the gate itself sets on every
+    # ticket, always overwritten last so a caller can't spoof who the
+    # requester was or which ticket a resource traces back to. gateTicketId
+    # doubles as the tag IAM enforcement keys on (aws:RequestTag/gateTicketId,
+    # deploy/scp/deny-ec2-mutations-except-gate.json) — setting it here means
+    # an agent that just propagates `tags` verbatim (docs/agent-contract.md
+    # step 4) gets it for free, no separate manual tag to remember.
+    tags = {**payload.tags, "gateTicketId": ticket_id, "owner": proposed_by}
     ticket = Ticket(
         ticket_id=ticket_id,
         subject=payload.subject,
@@ -109,7 +117,7 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
         planned_date=payload.planned_date,
         planned_action=payload.planned_action,
         action_details=details,
-        tags=payload.tags,
+        tags=tags,
         assignee=assignee,
         proposed_by=proposed_by,
         supersedes=supersedes.ticket_id if supersedes else None,
@@ -297,3 +305,41 @@ async def supersede_ticket(
     )
     await repo.transact_supersede(old.ticket_id, old.seq, deprecated, new_ticket, created)
     return new_ticket
+
+
+async def add_comment(repo: TicketRepository, ticket_id: str, actor_email: str, text: str) -> Ticket:
+    """Discussion only — open to any authenticated IT-team session user
+    regardless of role or ticket status, unlike approve/reject/supersede.
+    No field on Ticket changes; the comment lives only in the audit trail."""
+    ticket = await repo.get_ticket(ticket_id)
+    if ticket is None:
+        raise TicketNotFound(f"ticket {ticket_id} not found")
+    event = _event(
+        ticket, ticket.seq + 1, "COMMENT_ADDED", Actor(kind="human", id=actor_email),
+        from_status=ticket.status, to_status=ticket.status,
+        details={"text": text},
+    )
+    return await repo.append_event(ticket.ticket_id, ticket.seq, event)
+
+
+async def update_tags(
+    repo: TicketRepository, ticket_id: str, actor_email: str, new_tags: dict[str, str]
+) -> Ticket:
+    """Change a ticket's tags in place via a TAGS_UPDATED audit event — no new
+    ticket, no fresh approval. Safe to do without superseding because tags are
+    metadata: they're not part of ActionDetails, so parametersHash and every
+    approver-facing fact about the action are unaffected."""
+    ticket = await repo.get_ticket(ticket_id)
+    if ticket is None:
+        raise TicketNotFound(f"ticket {ticket_id} not found")
+    if ticket.superseded_by:
+        raise TicketSuperseded(f"ticket already superseded by {ticket.superseded_by}")
+    # gateTicketId/owner are set once at creation (build_ticket) and are never
+    # user-editable afterward — reassert them regardless of what the caller sent.
+    tags = {**new_tags, "gateTicketId": ticket.ticket_id, "owner": ticket.proposed_by}
+    event = _event(
+        ticket, ticket.seq + 1, "TAGS_UPDATED", Actor(kind="human", id=actor_email),
+        from_status=ticket.status, to_status=ticket.status,
+        details={"oldTags": ticket.tags, "tags": tags},
+    )
+    return await repo.append_event(ticket.ticket_id, ticket.seq, event)

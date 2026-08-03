@@ -89,7 +89,12 @@ def install(app: FastAPI, settings: Settings) -> None:
     @app.get("/api/me", response_model=MeResponse, response_model_by_alias=True)
     async def me(request: Request):
         user = require_session(request)
-        return MeResponse(email=user.email, name=user.name, role=user.role)
+        return MeResponse(
+            email=user.email,
+            name=user.name,
+            role=user.role,
+            approval_ttl_hours=settings.approval_ttl_hours,
+        )
 
 
 def require_session(request: Request) -> SessionUser:

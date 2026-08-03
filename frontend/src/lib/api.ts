@@ -71,4 +71,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  updateTags: (id: string, tags: Record<string, string>) =>
+    request<Ticket>(`/api/tickets/${id}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ tags }),
+    }),
+
+  addComment: (id: string, text: string) =>
+    request<Ticket>(`/api/tickets/${id}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
 }

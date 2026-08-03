@@ -99,6 +99,10 @@ Rules:
 - The gate sets `assignee` and `proposedBy` to your **verified** ARN and
   computes `parametersHash` (sha256 of canonical JSON) — store both the
   returned `ticketId` and `parametersHash`.
+- The gate also adds two tags to every ticket, overwriting any you send under
+  the same keys: `gateTicketId` (= this ticket's own id — see step 4) and
+  `owner` (= `proposedBy`). Don't try to set either yourself; they're not
+  caller-controlled.
 - Surface the ticket URL (`{PUBLIC_BASE_URL}/tickets/{ticketId}`) to the human
   operator in the conversation.
 
@@ -127,8 +131,9 @@ Body: `{"parametersHash": "<hash from create>"}`.
 
 One AWS call, exactly the approved parameters. Where the operation supports
 tagging (e.g. `RunInstances` `TagSpecifications`), propagate the ticket's
-`tags` **plus `gateTicketId=<ticketId>`** onto created resources. Capture the
-SDK response's `ResponseMetadata.RequestId`.
+`tags` verbatim onto created resources — `gateTicketId` is already in there
+(the gate sets it at creation, see step 1), so there's no separate tag to
+construct. Capture the SDK response's `ResponseMetadata.RequestId`.
 
 ### 5. Report — `POST /api/agent/tickets/{id}/execution/result`
 
@@ -150,7 +155,8 @@ AWS Organizations SCP layer (`deploy/scp/deny-ec2-mutations-except-gate.json`):
    the actual bypass fix, since it blocks every other caller (a developer's
    own credentials, the public MCP server run standalone, the CLI, the
    console) regardless of tool.
-2. Additionally require `aws:RequestTag/gateTicketId` — but **only** on
+2. Additionally require `aws:RequestTag/gateTicketId` (value = the ticket's
+   own id, set automatically at creation — see step 1) — but **only** on
    resource-*creating* calls that accept a `TagSpecifications` parameter
    (`RunInstances`, `CreateSecurityGroup`, `CreateVolume`, `CreateSnapshot`,
    `CreateKeyPair`). Actions on an *existing* resource (`StopInstances`,

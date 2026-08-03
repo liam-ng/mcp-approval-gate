@@ -51,6 +51,8 @@ AuditEventType = Literal[
     "EXECUTION_STARTED",
     "EXECUTION_COMPLETED",
     "EXECUTION_FAILED",
+    "TAGS_UPDATED",
+    "COMMENT_ADDED",
 ]
 
 
@@ -127,6 +129,7 @@ MUTABLE_FIELDS: frozenset[str] = frozenset(
         "superseded_by",
         "execution",
         "seq",
+        "tags",
     }
 )
 

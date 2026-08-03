@@ -1,5 +1,5 @@
 import { format } from "date-fns"
-import { Bot, CircleCheck, CircleX, Clock, UserRound, Cog } from "lucide-react"
+import { Bot, CircleCheck, CircleX, Clock, MessageSquare, Tag, UserRound, Cog } from "lucide-react"
 import type { AuditEvent } from "@/lib/types"
 
 const ICON: Record<AuditEvent["type"], typeof Clock> = {
@@ -12,6 +12,8 @@ const ICON: Record<AuditEvent["type"], typeof Clock> = {
   EXECUTION_STARTED: Cog,
   EXECUTION_COMPLETED: CircleCheck,
   EXECUTION_FAILED: CircleX,
+  TAGS_UPDATED: Tag,
+  COMMENT_ADDED: MessageSquare,
 }
 
 const LABEL: Record<AuditEvent["type"], string> = {
@@ -24,6 +26,14 @@ const LABEL: Record<AuditEvent["type"], string> = {
   EXECUTION_STARTED: "Execution started",
   EXECUTION_COMPLETED: "Execution completed",
   EXECUTION_FAILED: "Execution failed",
+  TAGS_UPDATED: "Tags updated",
+  COMMENT_ADDED: "Comment",
+}
+
+function formatTags(tags: unknown): string {
+  if (typeof tags !== "object" || tags === null) return ""
+  const entries = Object.entries(tags as Record<string, string>)
+  return entries.length ? entries.map(([k, v]) => `${k}=${v}`).join(", ") : "(none)"
 }
 
 function eventDetail(e: AuditEvent): string | null {
@@ -33,6 +43,7 @@ function eventDetail(e: AuditEvent): string | null {
     return `Superseded by ${d.supersededBy.slice(-8)}`
   if ((e.type === "EXECUTION_COMPLETED" || e.type === "EXECUTION_FAILED") && typeof d.message === "string")
     return d.message
+  if (e.type === "TAGS_UPDATED") return `${formatTags(d.oldTags)} → ${formatTags(d.tags)}`
   return null
 }
 
@@ -58,6 +69,11 @@ export function AuditTimeline({ events }: { events: AuditEvent[] }) {
               <span className="break-all">{e.actor.id}</span>
             </div>
             {eventDetail(e) && <p className="mt-1 text-xs text-muted-foreground">{eventDetail(e)}</p>}
+            {e.type === "COMMENT_ADDED" && typeof e.details?.text === "string" && (
+              <p className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/40 p-2 text-sm">
+                {e.details.text}
+              </p>
+            )}
           </li>
         )
       })}

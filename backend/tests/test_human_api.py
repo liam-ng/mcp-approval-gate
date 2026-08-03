@@ -68,7 +68,12 @@ def test_me_returns_role(make_client):
     client = make_client()
     login(client, "viewer@example.com", "viewer")
     me = client.get("/api/me").json()
-    assert me == {"email": "viewer@example.com", "name": "Dev User", "role": "viewer"}
+    assert me == {
+        "email": "viewer@example.com",
+        "name": "Dev User",
+        "role": "viewer",
+        "approvalTtlHours": 72,
+    }
 
 
 def test_viewer_cannot_approve(make_client):
@@ -180,6 +185,96 @@ def test_editor_cannot_approve_own_supersede(make_client):
     assert client.post(f"/api/tickets/{new['ticketId']}/approve").status_code == 200
 
 
+def test_update_tags_appends_audit_event_without_superseding(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client, "editor@example.com")
+
+    r = client.post(f"/api/tickets/{tid}/tags", json={"tags": {"team": "gti", "env": "staging"}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ticketId"] == tid  # same ticket, not a new one
+    assert body["tags"] == {
+        "team": "gti",
+        "env": "staging",
+        "gateTicketId": tid,
+        "owner": AGENT_ARN,  # set at creation; not user-editable
+    }
+    assert body["status"] == "PENDING_APPROVAL"  # unaffected
+
+    detail = client.get(f"/api/tickets/{tid}").json()
+    events = [e["type"] for e in detail["auditEvents"]]
+    assert events == ["TICKET_CREATED", "TAGS_UPDATED"]
+
+
+def test_update_tags_cannot_spoof_requestid_or_owner(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client, "editor@example.com")
+
+    r = client.post(
+        f"/api/tickets/{tid}/tags",
+        json={"tags": {"gateTicketId": "fake-id", "owner": "someone-else@example.com"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["tags"] == {"gateTicketId": tid, "owner": AGENT_ARN}
+
+
+def test_update_tags_rejects_over_limit(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client)
+    too_many = {f"k{i}": "v" for i in range(21)}
+    assert client.post(f"/api/tickets/{tid}/tags", json={"tags": too_many}).status_code == 422
+
+
+def test_update_tags_on_superseded_ticket_rejected(make_client):
+    client = make_client()
+    old_id = seed_agent_ticket(client)
+    login(client, "editor@example.com")
+    client.post(f"/api/tickets/{old_id}/supersede", json=create_payload())
+
+    r = client.post(f"/api/tickets/{old_id}/tags", json={"tags": {"team": "gti"}})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "TICKET_SUPERSEDED"
+
+
+def test_viewer_can_comment(make_client):
+    """Comments are open to the whole IT team, not gated to approvers like
+    approve/reject are — a viewer role must be able to post one."""
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client, "viewer@example.com", "viewer")
+
+    r = client.post(f"/api/tickets/{tid}/comments", json={"text": "Looks safe to me"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ticketId"] == tid  # comment doesn't create a new ticket
+
+    detail = client.get(f"/api/tickets/{tid}").json()
+    comment_events = [e for e in detail["auditEvents"] if e["type"] == "COMMENT_ADDED"]
+    assert len(comment_events) == 1
+    assert comment_events[0]["details"]["text"] == "Looks safe to me"
+    assert comment_events[0]["actor"] == {"kind": "human", "id": "viewer@example.com"}
+
+
+def test_comment_allowed_regardless_of_ticket_status(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client)
+    client.post(f"/api/tickets/{tid}/reject", json={"reason": "wrong instance targeted"})
+
+    r = client.post(f"/api/tickets/{tid}/comments", json={"text": "Re-raised as TICK-456"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "REJECTED"  # unaffected by the comment
+
+
+def test_comment_requires_nonempty_text(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client)
+    assert client.post(f"/api/tickets/{tid}/comments", json={"text": ""}).status_code == 422
+
+
 def test_list_filters(make_client):
     client = make_client()
     tid1 = seed_agent_ticket(client)
@@ -193,7 +288,7 @@ def test_list_filters(make_client):
     assert len(approved["items"]) == 1
     assert approved["items"][0]["ticketId"] == tid1
 
-    tagged = client.get("/api/tickets", params={"tag": "team=gti"}).json()
+    tagged = client.get("/api/tickets", params={"tag": "owner=liam.ng"}).json()
     assert len(tagged["items"]) == 2
     assert client.get("/api/tickets", params={"tag": "team=other"}).json()["items"] == []
 

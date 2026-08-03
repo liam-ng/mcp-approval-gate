@@ -43,7 +43,7 @@ export default function Tickets() {
           </TabsList>
         </Tabs>
         <Input
-          placeholder="Filter by tag, e.g. team=gti"
+          placeholder="Filter by tag, e.g. owner=liam.ng"
           value={tagFilter}
           onChange={(e) => setTagFilter(e.target.value)}
           className="w-56"

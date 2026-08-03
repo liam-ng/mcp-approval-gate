@@ -81,6 +81,8 @@ export interface AuditEvent {
     | "EXECUTION_STARTED"
     | "EXECUTION_COMPLETED"
     | "EXECUTION_FAILED"
+    | "TAGS_UPDATED"
+    | "COMMENT_ADDED"
   actor: { kind: "agent" | "human" | "system"; id: string }
   fromStatus?: TicketStatus | null
   toStatus?: TicketStatus | null
@@ -102,4 +104,5 @@ export interface Me {
   email: string
   name?: string | null
   role: "approver" | "viewer"
+  approvalTtlHours: number
 }
