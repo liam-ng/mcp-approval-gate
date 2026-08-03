@@ -9,6 +9,7 @@ Identity Center -> Entra ID) never touches the agent path.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +18,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _default_env_file() -> str:
-    """Pick the first env file that exists: .env.prod, then .env.liam-dev, then .env."""
+    """ENV_FILE, if set, wins outright (e.g. `ENV_FILE=.env.liam-mcp uvicorn ...`).
+    Otherwise pick the first of .env.prod, .env.liam-dev, .env that exists."""
+    override = os.environ.get("ENV_FILE")
+    if override:
+        return override
     for candidate in (".env.prod", ".env.liam-dev", ".env"):
         if Path(candidate).is_file():
             return candidate

@@ -12,6 +12,8 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": "http://localhost:8000",
+      "/mcp": "http://localhost:8000",
+      "/.well-known": "http://localhost:8000",
     },
   },
 })
