@@ -69,7 +69,7 @@ npm run dev                            # http://localhost:5173, proxies /api
 # Dev login (AUTH_MODE=dev): http://localhost:8000/api/auth/login?email=you@x.com&role=approver
 ```
 
-Tests:
+## Tests
 
 ```bash
 cd backend && python -m pytest
