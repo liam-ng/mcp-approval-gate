@@ -9,14 +9,23 @@ Identity Center -> Entra ID) never touches the agent path.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _default_env_file() -> str:
+    """Pick the first env file that exists: .env.prod, then .env.liam-dev, then .env."""
+    for candidate in (".env.prod", ".env.liam-dev", ".env"):
+        if Path(candidate).is_file():
+            return candidate
+    return ".env"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_default_env_file(), extra="ignore")
 
     # --- Human auth (provider-agnostic OIDC) ---
     # "dev" bypasses OIDC with a fake local user; refused when ENV=production.
