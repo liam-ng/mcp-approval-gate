@@ -1,7 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+.venv*/
 .pytest_cache/
 *.egg-info/
 
@@ -23,5 +23,4 @@ data/
 .idea/
 .DS_Store
 
-docs/
-plan.md
+docs/*

@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 /* Brand palette copied from gammon-powershell-portal (navy primary, red
    secondary), extended with success/warning/info for ticket status badges. */

@@ -21,8 +21,24 @@
     "contract in docs/agent-contract.md), and review the action list against your actual",
     "v1 EC2 scope.",
     "",
-    "Statement A denies the listed actions to everyone except the executor role — this is",
-    "the actual bypass fix and is unconditionally correct.",
+    "Statement A denies the listed actions to everyone except the executor role AND any",
+    "principal tagged mcp-gate-scp-exempt=true — this is the actual bypass fix and is",
+    "unconditionally correct for both. There is no ARN for an IAM Group (Groups can't call",
+    "APIs, so they're not a valid SCP principal) — the tag is the AWS-native way to grant a",
+    "whole cohort (e.g. a break-glass/admin group) an exception without editing this file",
+    "every time membership changes: tag/untag the individual IAM Users or Roles instead.",
+    "StringNotEqualsIfExists is required, not StringNotEquals, for the tag check: without",
+    "IfExists, principals with no tag at all would fail the condition in a way that still",
+    "correctly denies them here, but IfExists is what makes 'has the tag with value true'",
+    "correctly short-circuit the Deny — plain StringNotEquals on a sometimes-absent key is",
+    "the classic SCP footgun this avoids. Verify the exact truth table in IAM Policy",
+    "Simulator before attaching; a mistake here fails either open (bypass reappears) or",
+    "closed (breaks the legitimate executor).",
+    "",
+    "Statement C guards the exemption tag itself: without it, anyone who can call",
+    "iam:TagUser/TagRole could self-exempt from Statement A entirely, silently defeating",
+    "it. Replace its PrincipalArn with your actual security-admin role — only that role",
+    "may add or remove the mcp-gate-scp-exempt tag on any IAM identity.",
     "",
     "Statement B additionally requires aws:RequestTag/gateTicketId, but ONLY on the",
     "subset of actions that create a new resource and therefore accept a",
@@ -76,6 +92,23 @@
       "Condition": {
         "StringNotEquals": {
           "aws:PrincipalArn": ["arn:aws:iam::ACCOUNT_ID:role/mcp-approval-gate-executor"]
+        },
+        "StringNotEqualsIfExists": {
+          "aws:PrincipalTag/mcp-gate-scp-exempt": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DenyExemptTagMutationExceptSecurityAdmin",
+      "Effect": "Deny",
+      "Action": ["iam:TagUser", "iam:UntagUser", "iam:TagRole", "iam:UntagRole"],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": ["mcp-gate-scp-exempt"]
+        },
+        "StringNotEquals": {
+          "aws:PrincipalArn": ["arn:aws:iam::ACCOUNT_ID:role/security-admin"]
         }
       }
     },

@@ -54,12 +54,15 @@ PENDING_APPROVAL ─approve(n≥required)→ APPROVED ─start(hash echo)→ EXE
 ```bash
 # Backend (Python 3.12)
 cd backend
+# py -m venv .venv-mcp-gate
+# source .venv-mcp-gate/bin/activate
 pip install -e ".[dev]"
 cp ../.env.example .env
 uvicorn app.main:app --reload          # http://localhost:8000
 
 # Frontend
 cd frontend
+# npx npm-check-updates -u
 npm install
 npm run dev                            # http://localhost:5173, proxies /api
 
