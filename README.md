@@ -42,12 +42,15 @@ deploy/scp/ AWS Organizations SCP restricting mutating EC2 actions to the gate's
 ## Ticket lifecycle
 
 ```
-PENDING_APPROVAL ─approve(n≥required)→ APPROVED ─start(hash echo)→ EXECUTING → COMPLETED|FAILED
-   │        │                            │   │
+PENDING_APPROVAL ─approve(n≥required)→ APPROVED ─start(hash echo)→ EXECUTING → CLOSED|FAILED
+   │        │      │                     │   │      │
+   │        │      └close→ CLOSED        │   │      └close→ CLOSED
    │        └reject→ REJECTED            │   └supersede→ DEPRECATED
    └supersede→ DEPRECATED                └TTL→ EXPIRED
    └TTL→ EXPIRED
 ```
+
+`close` withdraws a PENDING_APPROVAL/APPROVED ticket without executing it — any signed-in user, not approver-gated like approve/reject.
 
 ## Local development
 

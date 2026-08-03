@@ -7,7 +7,7 @@ export const TICKET_STATUSES = [
   "DEPRECATED",
   "EXPIRED",
   "EXECUTING",
-  "COMPLETED",
+  "CLOSED",
   "FAILED",
 ] as const
 export type TicketStatus = (typeof TICKET_STATUSES)[number]
@@ -16,7 +16,7 @@ export const TERMINAL_STATUSES: ReadonlySet<TicketStatus> = new Set([
   "REJECTED",
   "DEPRECATED",
   "EXPIRED",
-  "COMPLETED",
+  "CLOSED",
   "FAILED",
 ])
 
@@ -83,6 +83,7 @@ export interface AuditEvent {
     | "EXECUTION_FAILED"
     | "TAGS_UPDATED"
     | "COMMENT_ADDED"
+    | "CLOSED"
   actor: { kind: "agent" | "human" | "system"; id: string }
   fromStatus?: TicketStatus | null
   toStatus?: TicketStatus | null

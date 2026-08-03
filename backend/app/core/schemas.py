@@ -89,6 +89,10 @@ class CommentCreateRequest(ApiModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class CloseTicketRequest(ApiModel):
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class TicketDetailResponse(ApiModel):
     ticket: Ticket
     lineage: list[Ticket]

@@ -21,7 +21,7 @@ TicketStatus = Literal[
     "DEPRECATED",
     "EXPIRED",
     "EXECUTING",
-    "COMPLETED",
+    "CLOSED",
     "FAILED",
 ]
 
@@ -32,13 +32,13 @@ ALL_STATUSES: tuple[TicketStatus, ...] = (
     "DEPRECATED",
     "EXPIRED",
     "EXECUTING",
-    "COMPLETED",
+    "CLOSED",
     "FAILED",
 )
 
 # No transition leaves these states; pollers stop here.
 TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"REJECTED", "DEPRECATED", "EXPIRED", "COMPLETED", "FAILED"}
+    {"REJECTED", "DEPRECATED", "EXPIRED", "CLOSED", "FAILED"}
 )
 
 AuditEventType = Literal[
@@ -53,6 +53,9 @@ AuditEventType = Literal[
     "EXECUTION_FAILED",
     "TAGS_UPDATED",
     "COMMENT_ADDED",
+    # Manual close (service.close_ticket) — distinct from EXECUTION_COMPLETED,
+    # which also lands on status=CLOSED but only via a successful execution.
+    "CLOSED",
 ]
 
 

@@ -263,3 +263,131 @@ def test_check_ticket_status_rejects_other_users(mcp_client):
             headers=bob,
         ).json()["result"]
         assert result["isError"] is True
+
+
+def _create_via_mcp(client, headers, **overrides):
+    args = {
+        "subject": "Stop staging instance",
+        "planned_date": "2026-08-10",
+        "planned_action": "Stop EC2 instance i-0abc",
+        "operation": "StopInstances",
+        "region": "ap-east-1",
+        "parameters": {"InstanceIds": ["i-0abc"]},
+    }
+    args.update(overrides)
+    return rpc(
+        client, "tools/call", {"name": "create_change_ticket", "arguments": args}, headers=headers
+    ).json()["result"]["structuredContent"]
+
+
+def test_supersede_change_ticket_deprecates_and_creates_new(mcp_client):
+    with respx.mock:
+        mock_idp(respx.mock)
+        alice = authed_headers(email="alice@example.com")
+        initialize(mcp_client, alice)
+        rpc(mcp_client, "notifications/initialized", headers=alice)
+
+        original = _create_via_mcp(mcp_client, alice)
+
+        result = rpc(
+            mcp_client,
+            "tools/call",
+            {
+                "name": "supersede_change_ticket",
+                "arguments": {
+                    "ticket_id": original["ticketId"],
+                    "subject": "Stop staging instance (rescheduled)",
+                    "planned_date": "2026-08-11",
+                    "planned_action": "Stop EC2 instance i-0abc, rescheduled",
+                    "operation": "StopInstances",
+                    "region": "ap-east-1",
+                    "parameters": {"InstanceIds": ["i-0abc"]},
+                },
+            },
+            headers=alice,
+        ).json()["result"]
+        assert result["isError"] is False
+        content = result["structuredContent"]
+        assert content["supersedes"] == original["ticketId"]
+        assert content["status"] == "PENDING_APPROVAL"
+
+        old = mcp_client.repo._tickets[original["ticketId"]]  # type: ignore[attr-defined]
+        assert old.status == "DEPRECATED"
+        assert old.superseded_by == content["ticketId"]
+
+
+def test_supersede_change_ticket_unknown_id_is_tool_error(mcp_client):
+    with respx.mock:
+        mock_idp(respx.mock)
+        alice = authed_headers(email="alice@example.com")
+        initialize(mcp_client, alice)
+        rpc(mcp_client, "notifications/initialized", headers=alice)
+
+        result = rpc(
+            mcp_client,
+            "tools/call",
+            {
+                "name": "supersede_change_ticket",
+                "arguments": {
+                    "ticket_id": "01FAKE00000000000000000000",
+                    "subject": "Stop staging instance",
+                    "planned_date": "2026-08-10",
+                    "planned_action": "Stop EC2 instance i-0abc",
+                    "operation": "StopInstances",
+                    "region": "ap-east-1",
+                    "parameters": {"InstanceIds": ["i-0abc"]},
+                },
+            },
+            headers=alice,
+        ).json()["result"]
+        assert result["isError"] is True
+
+
+def test_close_ticket_via_mcp(mcp_client):
+    with respx.mock:
+        mock_idp(respx.mock)
+        alice = authed_headers(email="alice@example.com")
+        initialize(mcp_client, alice)
+        rpc(mcp_client, "notifications/initialized", headers=alice)
+
+        created = _create_via_mcp(mcp_client, alice)
+
+        result = rpc(
+            mcp_client,
+            "tools/call",
+            {
+                "name": "close_ticket",
+                "arguments": {"ticket_id": created["ticketId"], "reason": "no longer needed"},
+            },
+            headers=alice,
+        ).json()["result"]
+        assert result["isError"] is False
+        assert result["structuredContent"]["status"] == "CLOSED"
+
+        ticket = mcp_client.repo._tickets[created["ticketId"]]  # type: ignore[attr-defined]
+        assert ticket.status == "CLOSED"
+
+
+def test_close_ticket_already_executing_is_tool_error(mcp_client):
+    with respx.mock:
+        mock_idp(respx.mock)
+        alice = authed_headers(email="alice@example.com")
+        initialize(mcp_client, alice)
+        rpc(mcp_client, "notifications/initialized", headers=alice)
+        created = _create_via_mcp(mcp_client, alice)
+
+        result = rpc(
+            mcp_client,
+            "tools/call",
+            {"name": "close_ticket", "arguments": {"ticket_id": created["ticketId"]}},
+            headers=alice,
+        ).json()["result"]
+        assert result["isError"] is False  # PENDING_APPROVAL -> CLOSED is fine once
+
+        second = rpc(
+            mcp_client,
+            "tools/call",
+            {"name": "close_ticket", "arguments": {"ticket_id": created["ticketId"]}},
+            headers=alice,
+        ).json()["result"]
+        assert second["isError"] is True  # already CLOSED, not PENDING_APPROVAL/APPROVED

@@ -75,13 +75,15 @@ def apply_event(ticket: Ticket, event: AuditEvent) -> Ticket:
         updates["superseded_by"] = details["supersededBy"]
     elif event.type == "EXPIRED":
         updates["status"] = "EXPIRED"
+    elif event.type == "CLOSED":
+        updates["status"] = "CLOSED"
     elif event.type == "EXECUTION_STARTED":
         updates["status"] = "EXECUTING"
         updates["execution"] = Execution(started_at=event.timestamp)
     elif event.type in ("EXECUTION_COMPLETED", "EXECUTION_FAILED"):
         if ticket.execution is None:
             raise ConflictError(f"{event.type} without EXECUTION_STARTED for {ticket.ticket_id}")
-        updates["status"] = "COMPLETED" if event.type == "EXECUTION_COMPLETED" else "FAILED"
+        updates["status"] = "CLOSED" if event.type == "EXECUTION_COMPLETED" else "FAILED"
         updates["execution"] = ticket.execution.model_copy(
             update={
                 "finished_at": event.timestamp,

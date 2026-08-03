@@ -21,10 +21,12 @@ _ALLOWED: dict[tuple[TicketStatus, TicketStatus], frozenset[str]] = {
     ("PENDING_APPROVAL", "REJECTED"): frozenset({"human"}),
     ("PENDING_APPROVAL", "DEPRECATED"): frozenset({"human"}),
     ("PENDING_APPROVAL", "EXPIRED"): frozenset({"system"}),
+    ("PENDING_APPROVAL", "CLOSED"): frozenset({"human"}),
     ("APPROVED", "DEPRECATED"): frozenset({"human"}),
     ("APPROVED", "EXPIRED"): frozenset({"system"}),
     ("APPROVED", "EXECUTING"): frozenset({"agent"}),
-    ("EXECUTING", "COMPLETED"): frozenset({"agent"}),
+    ("APPROVED", "CLOSED"): frozenset({"human"}),
+    ("EXECUTING", "CLOSED"): frozenset({"agent"}),
     ("EXECUTING", "FAILED"): frozenset({"agent"}),
 }
 

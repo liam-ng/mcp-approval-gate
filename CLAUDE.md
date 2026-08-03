@@ -66,7 +66,7 @@ Environment note: in this WSL sandbox, Node is only on PATH after `export PATH="
 ### API surface
 - `backend/app/api/agent_tickets.py` — SigV4-only routes: create (idempotent), list (caller's own tickets, e.g. to discover ones an MCP tool call created), poll, `execution/start` (hash echo), `execution/result`.
 - `backend/app/api/tickets.py` — session-only routes: list/filter, detail (ticket + lineage + audit events), approve, reject, supersede.
-- `backend/app/api/mcp_gateway.py` — `build_mcp_app()`: the `/mcp` Streamable HTTP route (official `mcp` SDK's `MCPServer`), tools `create_change_ticket` / `check_ticket_status`. Mounted at the ASGI level in `main.py`, not via `app.include_router` — see the comment there for why (the SDK's own auth middleware and `main.py`'s SPA catch-all route can't cleanly nest inside the same FastAPI router).
+- `backend/app/api/mcp_gateway.py` — `build_mcp_app()`: the `/mcp` Streamable HTTP route (official `mcp` SDK's `MCPServer`), tools `create_change_ticket` / `check_ticket_status` / `supersede_change_ticket` / `close_ticket`. Mounted at the ASGI level in `main.py`, not via `app.include_router` — see the comment there for why (the SDK's own auth middleware and `main.py`'s SPA catch-all route can't cleanly nest inside the same FastAPI router).
 - `backend/app/api/errors.py` — maps the `ServiceError`/`RepoError` hierarchy to `{"error": {"code","message"}}`.
 - `backend/app/api/middleware.py` — access logging + a dependency-free sliding-window rate limiter on `/api/agent/*`.
 - `backend/app/jobs/expiry.py` — background sweep (started from `main.py`'s lifespan) that expires stale `PENDING_APPROVAL`/`APPROVED` tickets per `APPROVAL_TTL_HOURS`.

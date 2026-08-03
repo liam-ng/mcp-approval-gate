@@ -212,7 +212,7 @@ async def report_execution_result(
     ticket = await get_agent_ticket(repo, ticket_id, caller_arn)
     if ticket.status != "EXECUTING":
         raise InvalidTicketState(f"ticket is {ticket.status}, not EXECUTING")
-    to_status = "COMPLETED" if result.outcome == "success" else "FAILED"
+    to_status = "CLOSED" if result.outcome == "success" else "FAILED"
     assert_transition(ticket.status, to_status, "agent")
     event = _event(
         ticket, ticket.seq + 1,
@@ -305,6 +305,30 @@ async def supersede_ticket(
     )
     await repo.transact_supersede(old.ticket_id, old.seq, deprecated, new_ticket, created)
     return new_ticket
+
+
+async def close_ticket(
+    repo: TicketRepository, ticket_id: str, actor_email: str, reason: str | None = None
+) -> Ticket:
+    """Withdraw a ticket without executing it — an alternative outcome to
+    reject/supersede for "no longer needed", not a decision about whether the
+    action itself was safe. Open to any session user like supersede (not
+    approver-gated like approve/reject): closing your own ticket isn't a
+    self-approval risk, since nothing gets executed either way. Only legal
+    from PENDING_APPROVAL/APPROVED, same as supersede — an EXECUTING ticket
+    must not be closed out from under the agent mid-call."""
+    ticket = await repo.get_ticket(ticket_id)
+    if ticket is None:
+        raise TicketNotFound(f"ticket {ticket_id} not found")
+    if ticket.status not in ("PENDING_APPROVAL", "APPROVED"):
+        raise InvalidTicketState(f"cannot close a {ticket.status} ticket")
+    assert_transition(ticket.status, "CLOSED", "human")
+    event = _event(
+        ticket, ticket.seq + 1, "CLOSED", Actor(kind="human", id=actor_email),
+        from_status=ticket.status, to_status="CLOSED",
+        details={"reason": reason} if reason else None,
+    )
+    return await repo.append_event(ticket.ticket_id, ticket.seq, event)
 
 
 async def add_comment(repo: TicketRepository, ticket_id: str, actor_email: str, text: str) -> Ticket:

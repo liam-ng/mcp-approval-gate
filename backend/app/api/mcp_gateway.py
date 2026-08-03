@@ -46,7 +46,11 @@ def build_mcp_app(settings: Settings) -> Starlette:
             "Propose AWS EC2 changes for human approval. create_change_ticket never "
             "executes anything itself: it opens a ticket that a human approver (never "
             "you) must approve in the web portal before the trusted executor runs it. "
-            "Always surface ticketUrl to the user. Use check_ticket_status to follow up."
+            "Always surface ticketUrl to the user. Use check_ticket_status to follow up. "
+            "If a ticket needs different parameters before it's approved, use "
+            "supersede_change_ticket rather than opening a duplicate — it deprecates the "
+            "old ticket and requires fresh approval. Use close_ticket to withdraw a ticket "
+            "that's no longer needed instead of leaving it pending forever."
         ),
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(settings.mcp_issuer),  # type: ignore[arg-type]
@@ -134,6 +138,75 @@ def build_mcp_app(settings: Settings) -> Starlette:
             "rejectionReason": ticket.rejection_reason,
             "supersededBy": ticket.superseded_by,
         }
+
+    @server.tool(structured_output=True)
+    async def supersede_change_ticket(
+        ticket_id: str,
+        subject: str,
+        planned_date: str,
+        planned_action: str,
+        operation: str,
+        region: str,
+        parameters: dict[str, Any],
+        resource_arns: list[str] | None = None,
+        reason: str | None = None,
+        tags: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Edit a previously-created ticket that hasn't executed yet. Tickets
+        are immutable — this deprecates `ticket_id` and creates a new
+        PENDING_APPROVAL ticket in its place, requiring fresh approval. You
+        (the authenticated user) become the new proposer, so you cannot also
+        approve this superseding ticket. Supply the FULL new details, not just
+        what changed — this replaces the ticket's action entirely, it does not
+        patch individual fields."""
+        access_token = get_access_token()
+        if access_token is None or not access_token.subject:
+            raise ValueError("no authenticated user on this request")
+
+        payload = TicketCreateRequest(
+            subject=subject,
+            planned_date=planned_date,  # type: ignore[arg-type]
+            planned_action=planned_action,
+            action_details=ActionDetailsIn(
+                service="ec2",
+                operation=operation,
+                region=region,
+                parameters=parameters,
+                resource_arns=resource_arns or [],
+                reason=reason,
+            ),
+            tags=tags or {},
+        )
+        repo = get_repo()
+        try:
+            new_ticket = await service.supersede_ticket(repo, ticket_id, access_token.subject, payload)
+        except service.ServiceError as e:
+            raise ValueError(str(e)) from e
+
+        return {
+            "ticketId": new_ticket.ticket_id,
+            "status": new_ticket.status,
+            "ticketUrl": f"{settings.public_base_url.rstrip('/')}/tickets/{new_ticket.ticket_id}",
+            "supersedes": ticket_id,
+        }
+
+    @server.tool(structured_output=True)
+    async def close_ticket(ticket_id: str, reason: str | None = None) -> dict[str, Any]:
+        """Withdraw a ticket that's no longer needed, without executing it —
+        an alternative to leaving it pending or asking someone to reject it.
+        Only PENDING_APPROVAL/APPROVED tickets can be closed this way; once
+        an agent has started executing, it must run to completion."""
+        access_token = get_access_token()
+        if access_token is None or not access_token.subject:
+            raise ValueError("no authenticated user on this request")
+
+        repo = get_repo()
+        try:
+            ticket = await service.close_ticket(repo, ticket_id, access_token.subject, reason)
+        except service.ServiceError as e:
+            raise ValueError(str(e)) from e
+
+        return {"ticketId": ticket.ticket_id, "status": ticket.status}
 
     return server.streamable_http_app(
         streamable_http_path="/mcp",

@@ -16,6 +16,7 @@ from app.api.deps import get_repo
 from app.core import service
 from app.core.models import Ticket, TicketStatus
 from app.core.schemas import (
+    CloseTicketRequest,
     CommentCreateRequest,
     RejectRequest,
     TagsUpdateRequest,
@@ -92,3 +93,8 @@ async def update_tags(ticket_id: str, payload: TagsUpdateRequest, user: User, re
 @router.post("/{ticket_id}/comments", response_model=Ticket, response_model_by_alias=True)
 async def add_comment(ticket_id: str, payload: CommentCreateRequest, user: User, repo: Repo):
     return await service.add_comment(repo, ticket_id, user.email, payload.text)
+
+
+@router.post("/{ticket_id}/close", response_model=Ticket, response_model_by_alias=True)
+async def close_ticket(ticket_id: str, payload: CloseTicketRequest, user: User, repo: Repo):
+    return await service.close_ticket(repo, ticket_id, user.email, payload.reason)

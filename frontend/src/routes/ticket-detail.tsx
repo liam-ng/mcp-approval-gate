@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApproveRejectActions } from "@/components/tickets/approve-reject-actions"
 import { AuditTimeline } from "@/components/tickets/audit-timeline"
+import { CloseTicketDialog } from "@/components/tickets/close-ticket-dialog"
 import { CommentForm } from "@/components/tickets/comment-form"
 import { LineageChain } from "@/components/tickets/lineage-chain"
 import { SupersedeDialog } from "@/components/tickets/supersede-dialog"
@@ -81,6 +82,7 @@ export default function TicketDetail() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>Change request</CardTitle>
             <div className="flex gap-2">
+              {me && <CloseTicketDialog ticket={ticket} />}
               {me && <SupersedeDialog ticket={ticket} />}
             </div>
           </CardHeader>

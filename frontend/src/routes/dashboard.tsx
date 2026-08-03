@@ -11,7 +11,7 @@ const SUMMARY: { status: TicketStatus; label: string; accent: string }[] = [
   { status: "PENDING_APPROVAL", label: "Pending approval", accent: "text-warning" },
   { status: "APPROVED", label: "Approved", accent: "text-success" },
   { status: "EXECUTING", label: "Executing", accent: "text-info" },
-  { status: "COMPLETED", label: "Completed", accent: "text-primary" },
+  { status: "CLOSED", label: "Closed", accent: "text-primary" },
 ]
 
 export default function Dashboard() {

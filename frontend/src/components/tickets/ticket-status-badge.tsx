@@ -8,7 +8,7 @@ const VARIANT: Record<TicketStatus, "default" | "secondary" | "destructive" | "s
   DEPRECATED: "outline",
   EXPIRED: "outline",
   EXECUTING: "info",
-  COMPLETED: "default",
+  CLOSED: "default",
   FAILED: "destructive",
 }
 
@@ -19,7 +19,7 @@ const LABEL: Record<TicketStatus, string> = {
   DEPRECATED: "Deprecated",
   EXPIRED: "Expired",
   EXECUTING: "Executing",
-  COMPLETED: "Completed",
+  CLOSED: "Closed",
   FAILED: "Failed",
 }
 

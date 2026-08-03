@@ -1,5 +1,5 @@
 import { format } from "date-fns"
-import { Bot, CircleCheck, CircleX, Clock, MessageSquare, Tag, UserRound, Cog } from "lucide-react"
+import { Archive, Bot, CircleCheck, CircleX, Clock, MessageSquare, Tag, UserRound, Cog } from "lucide-react"
 import type { AuditEvent } from "@/lib/types"
 
 const ICON: Record<AuditEvent["type"], typeof Clock> = {
@@ -14,6 +14,7 @@ const ICON: Record<AuditEvent["type"], typeof Clock> = {
   EXECUTION_FAILED: CircleX,
   TAGS_UPDATED: Tag,
   COMMENT_ADDED: MessageSquare,
+  CLOSED: Archive,
 }
 
 const LABEL: Record<AuditEvent["type"], string> = {
@@ -28,6 +29,7 @@ const LABEL: Record<AuditEvent["type"], string> = {
   EXECUTION_FAILED: "Execution failed",
   TAGS_UPDATED: "Tags updated",
   COMMENT_ADDED: "Comment",
+  CLOSED: "Closed",
 }
 
 function formatTags(tags: unknown): string {
@@ -44,6 +46,7 @@ function eventDetail(e: AuditEvent): string | null {
   if ((e.type === "EXECUTION_COMPLETED" || e.type === "EXECUTION_FAILED") && typeof d.message === "string")
     return d.message
   if (e.type === "TAGS_UPDATED") return `${formatTags(d.oldTags)} → ${formatTags(d.tags)}`
+  if (e.type === "CLOSED" && typeof d.reason === "string") return `Reason: ${d.reason}`
   return null
 }
 

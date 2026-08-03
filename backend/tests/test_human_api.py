@@ -275,6 +275,47 @@ def test_comment_requires_nonempty_text(make_client):
     assert client.post(f"/api/tickets/{tid}/comments", json={"text": ""}).status_code == 422
 
 
+def test_close_pending_ticket_appends_audit_event(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client, "viewer@example.com", "viewer")  # any session role, like supersede
+
+    r = client.post(f"/api/tickets/{tid}/close", json={"reason": "no longer needed"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ticketId"] == tid
+    assert body["status"] == "CLOSED"
+
+    detail = client.get(f"/api/tickets/{tid}").json()
+    events = [e["type"] for e in detail["auditEvents"]]
+    assert events == ["TICKET_CREATED", "CLOSED"]
+    close_event = detail["auditEvents"][-1]
+    assert close_event["actor"] == {"kind": "human", "id": "viewer@example.com"}
+    assert close_event["details"]["reason"] == "no longer needed"
+
+
+def test_close_approved_ticket(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client)
+    client.post(f"/api/tickets/{tid}/approve")
+
+    r = client.post(f"/api/tickets/{tid}/close", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "CLOSED"
+
+
+def test_close_terminal_ticket_rejected(make_client):
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client)
+    client.post(f"/api/tickets/{tid}/reject", json={"reason": "wrong instance targeted"})
+
+    r = client.post(f"/api/tickets/{tid}/close", json={})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "INVALID_STATE"
+
+
 def test_list_filters(make_client):
     client = make_client()
     tid1 = seed_agent_ticket(client)

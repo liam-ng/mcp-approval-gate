@@ -18,10 +18,12 @@ LEGAL = {
     ("PENDING_APPROVAL", "REJECTED", "human"),
     ("PENDING_APPROVAL", "DEPRECATED", "human"),
     ("PENDING_APPROVAL", "EXPIRED", "system"),
+    ("PENDING_APPROVAL", "CLOSED", "human"),
     ("APPROVED", "DEPRECATED", "human"),
     ("APPROVED", "EXPIRED", "system"),
     ("APPROVED", "EXECUTING", "agent"),
-    ("EXECUTING", "COMPLETED", "agent"),
+    ("APPROVED", "CLOSED", "human"),
+    ("EXECUTING", "CLOSED", "agent"),
     ("EXECUTING", "FAILED", "agent"),
 }
 
@@ -43,8 +45,8 @@ def test_terminal_statuses_have_no_outgoing_transitions():
 
 def test_assert_transition_raises_with_context():
     with pytest.raises(TransitionError) as exc:
-        assert_transition("COMPLETED", "EXECUTING", "agent")
-    assert exc.value.from_status == "COMPLETED"
+        assert_transition("CLOSED", "EXECUTING", "agent")
+    assert exc.value.from_status == "CLOSED"
     assert exc.value.to_status == "EXECUTING"
 
 

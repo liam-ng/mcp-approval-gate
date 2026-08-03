@@ -331,5 +331,5 @@ async def test_full_agent_flow_with_hash_mismatch(tmp_path):
         ROLE_ARN,
         ExecutionResultRequest(outcome="success", message="stopped", aws_request_ids=["req-1"]),
     )
-    assert done.status == "COMPLETED"
+    assert done.status == "CLOSED"
     assert done.execution is not None and done.execution.outcome == "success"

@@ -83,4 +83,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text }),
     }),
+
+  close: (id: string, reason?: string) =>
+    request<Ticket>(`/api/tickets/${id}/close`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason || null }),
+    }),
 }
