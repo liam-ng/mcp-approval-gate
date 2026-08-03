@@ -42,7 +42,14 @@ data:
   # Register a second, public/native OAuth client (PKCE, no secret) for IDE
   # clients in the same IdP as OIDC_ISSUER above before enabling this.
   MCP_ENABLED: "true"
+  # Checked against the token's `aud` claim, falling back to `client_id` —
+  # Cognito access tokens never carry `aud`, so on Cognito this must be the
+  # IDE app client's own client ID, not the /mcp resource URL or a generic
+  # IdP app-registration URI (see docs/plan.md's 2026-08-03 decision log).
   MCP_OAUTH_AUDIENCE: "api://mcp-approval-gate" # match the IdP app registration
-  MCP_REQUIRED_SCOPES: "mcp:invoke"
+  # openid/email/profile are standard OIDC scopes. `email` must be included
+  # or the IDE never requests it and the gate has no identity to attribute
+  # the ticket to.
+  MCP_REQUIRED_SCOPES: "openid email profile"
   # Must also be included in ALLOWED_AGENT_ARNS above.
   MCP_EXECUTOR_ARN: "arn:aws:iam::ACCOUNT_ID:role/mcp-approval-gate-executor"

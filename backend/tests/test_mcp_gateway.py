@@ -25,21 +25,33 @@ EXECUTOR_ARN = "arn:aws:iam::123456789012:role/mcp-executor"
 KEY = JsonWebKey.generate_key("RSA", 2048, options={"kid": "test-key"}, is_private=True)
 
 
-def issue_token(*, email="alice@example.com", aud="gate-mcp", scope="mcp:invoke", exp_delta=3600) -> str:
+def issue_token(
+    *, email="alice@example.com", aud="gate-mcp", client_id=None, scope="mcp:invoke", exp_delta=3600
+) -> str:
     now = int(time.time())
-    payload = {"iss": ISSUER, "aud": aud, "email": email, "iat": now, "exp": now + exp_delta}
+    payload = {"iss": ISSUER, "iat": now, "exp": now + exp_delta}
+    if aud is not None:
+        payload["aud"] = aud
+    if client_id is not None:
+        payload["client_id"] = client_id
+    if email is not None:
+        payload["email"] = email
     if scope:
         payload["scope"] = scope
     return jwt.encode({"alg": "RS256", "kid": "test-key"}, payload, KEY).decode()
 
 
-def mock_idp(respx_mock):
+def mock_idp(respx_mock, *, userinfo_email=None):
     respx_mock.get(f"{ISSUER}/.well-known/openid-configuration").mock(
-        return_value=Response(200, json={"jwks_uri": f"{ISSUER}/jwks.json"})
+        return_value=Response(
+            200, json={"jwks_uri": f"{ISSUER}/jwks.json", "userinfo_endpoint": f"{ISSUER}/userinfo"}
+        )
     )
     respx_mock.get(f"{ISSUER}/jwks.json").mock(
         return_value=Response(200, json={"keys": [KEY.as_dict(is_private=False)]})
     )
+    if userinfo_email is not None:
+        respx_mock.get(f"{ISSUER}/userinfo").mock(return_value=Response(200, json={"email": userinfo_email}))
 
 
 @pytest.fixture()
@@ -109,6 +121,43 @@ def test_wrong_audience_rejected(mcp_client):
         mock_idp(respx.mock)
         r = initialize(mcp_client, headers=authed_headers(aud="someone-else"))
         assert r.status_code == 401
+
+
+def test_client_id_claim_satisfies_audience_when_aud_missing(mcp_client):
+    """Cognito access tokens carry `client_id`, never `aud` — the verifier must
+    accept a match on either claim (app/auth/mcp_token_verifier.py)."""
+    with respx.mock:
+        mock_idp(respx.mock)
+        headers = authed_headers(aud=None, client_id="gate-mcp")
+        assert initialize(mcp_client, headers).status_code == 200
+
+
+def test_email_resolved_via_userinfo_when_missing_from_token(mcp_client):
+    """Cognito access tokens never carry profile claims like `email` — the
+    verifier must fall back to a /userinfo lookup."""
+    with respx.mock:
+        mock_idp(respx.mock, userinfo_email="alice@example.com")
+        headers = authed_headers(email=None)
+        assert initialize(mcp_client, headers).status_code == 200
+        rpc(mcp_client, "notifications/initialized", headers=headers)
+
+        result = rpc(
+            mcp_client,
+            "tools/call",
+            {
+                "name": "create_change_ticket",
+                "arguments": {
+                    "subject": "Stop staging instance",
+                    "planned_date": "2026-08-10",
+                    "planned_action": "Stop EC2 instance i-0abc",
+                    "operation": "StopInstances",
+                    "region": "ap-east-1",
+                    "parameters": {"InstanceIds": ["i-0abc"]},
+                },
+            },
+            headers=headers,
+        ).json()["result"]["structuredContent"]
+        assert result["created"] is True
 
 
 def test_protected_resource_metadata_advertises_the_idp(mcp_client):

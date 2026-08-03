@@ -52,13 +52,14 @@ PENDING_APPROVAL ─approve(n≥required)→ APPROVED ─start(hash echo)→ EXE
 ## Local development
 
 ```bash
-# Backend (Python 3.12)
+# Backend (Python 3.14)
 cd backend
 # py -m venv .venv-mcp-gate
 # source .venv-mcp-gate/bin/activate
 pip install -e ".[dev]"
 cp ../.env.example .env
 uvicorn app.main:app --reload          # http://localhost:8000
+# ENV_FILE=.env.liam-mcp uvicorn app.main:app --reload --port 8001
 
 # Frontend
 cd frontend
