@@ -107,10 +107,13 @@ class ApprovalLinkPreview(ApiModel):
     action_details: ActionDetails
     proposed_by: str
     action: Literal["approve", "reject"]
-    # False once the ticket has moved on (already approved/rejected/expired/
-    # superseded by someone else, or by this same link) -- the landing page
-    # uses this to show a "no longer actionable" state instead of a form.
+    # False whenever clicking through would just fail server-side -- the
+    # landing page uses this (and blocked_reason below) to show a generic
+    # explanation instead of a confirm form that's destined to error out.
     actionable: bool
+    blocked_reason: (
+        Literal["already_actioned", "not_approver", "self_approval", "duplicate_approval"] | None
+    ) = None
 
 
 class ApprovalLinkActionRequest(ApiModel):

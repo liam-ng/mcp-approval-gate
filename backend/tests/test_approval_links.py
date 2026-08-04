@@ -157,10 +157,56 @@ def test_preview_does_not_mutate(make_client):
     assert body["ticketId"] == tid
     assert body["action"] == "approve"
     assert body["actionable"] is True
+    assert body["blockedReason"] is None
 
     ticket = anyio.run(client.repo.get_ticket, tid)
     assert ticket.status == "PENDING_APPROVAL"
     assert ticket.approvals == []
+
+
+def test_preview_explains_revoked_approver(make_client):
+    client = make_client(approver_emails="someone-else@example.com")
+    tid = seed_ticket(client)
+    token = token_for("approve", tid, APPROVER)
+
+    body = client.get(f"/api/tickets/by-link/{token}").json()
+    assert body["actionable"] is False
+    assert body["blockedReason"] == "not_approver"
+
+
+def test_preview_explains_self_approval(make_client):
+    client = make_client(approver_emails=f"{APPROVER},{AGENT_ARN}")
+    tid = seed_ticket(client)  # proposed_by == AGENT_ARN
+    token = token_for("approve", tid, AGENT_ARN)
+
+    body = client.get(f"/api/tickets/by-link/{token}").json()
+    assert body["actionable"] is False
+    assert body["blockedReason"] == "self_approval"
+
+
+def test_preview_explains_duplicate_approval(make_client, monkeypatch):
+    monkeypatch.setenv("REQUIRED_APPROVALS", "2")
+    client = make_client(approver_emails=f"{APPROVER},manager@example.com")
+    settings_module._settings = None
+    tid = seed_ticket(client)
+    approve_token = token_for("approve", tid, APPROVER)
+    assert client.post(f"/api/tickets/by-link/{approve_token}", json={}).status_code == 200
+
+    body = client.get(f"/api/tickets/by-link/{approve_token}").json()
+    assert body["actionable"] is False
+    assert body["blockedReason"] == "duplicate_approval"
+
+
+def test_preview_explains_already_actioned(make_client):
+    client = make_client()
+    tid = seed_ticket(client)
+    approve_token = token_for("approve", tid)
+    assert client.post(f"/api/tickets/by-link/{approve_token}", json={}).status_code == 200
+
+    reject_token = token_for("reject", tid)
+    body = client.get(f"/api/tickets/by-link/{reject_token}").json()
+    assert body["actionable"] is False
+    assert body["blockedReason"] == "already_actioned"
 
 
 def test_approve_via_link(make_client):

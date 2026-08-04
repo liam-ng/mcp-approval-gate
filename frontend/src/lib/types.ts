@@ -121,4 +121,5 @@ export interface ApprovalLinkPreview {
   proposedBy: string
   action: "approve" | "reject"
   actionable: boolean
+  blockedReason?: "already_actioned" | "not_approver" | "self_approval" | "duplicate_approval" | null
 }

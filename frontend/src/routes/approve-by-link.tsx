@@ -19,6 +19,39 @@ import { Textarea } from "@/components/ui/textarea"
 import { TicketStatusBadge } from "@/components/tickets/ticket-status-badge"
 import { api, ApiError } from "@/lib/api"
 import { formatResourceScopeSummary, summarizeResourceScope } from "@/lib/resource-scope"
+import type { ApprovalLinkPreview as ApprovalLinkPreviewT } from "@/lib/types"
+
+// One message per reason the backend can refuse to act (approval_link_actions.py's
+// blocked_reason) — same courtesy the portal gives a session approver
+// (approve-reject-actions.tsx) for the equivalent role/proposer/duplicate checks.
+const BLOCKED_MESSAGES: Record<
+  NonNullable<ApprovalLinkPreviewT["blockedReason"]> | "already_actioned",
+  (p: ApprovalLinkPreviewT) => { title: string; description: React.ReactNode }
+> = {
+  already_actioned: (p) => ({
+    title: "Already actioned",
+    description: (
+      <>
+        <span className="font-medium">{p.subject}</span> is no longer pending approval (status:{" "}
+        <TicketStatusBadge status={p.status} />). No action needed — sign in to the portal for the
+        full history.
+      </>
+    ),
+  }),
+  not_approver: () => ({
+    title: "Approver access required",
+    description:
+      "Only approvers can approve or reject a change request, and this address is no longer on the approver list. Sign in to the portal if you believe this is a mistake.",
+  }),
+  self_approval: () => ({
+    title: "You proposed this ticket",
+    description: "A ticket's proposer can't approve or reject their own request — a peer or manager must action it instead.",
+  }),
+  duplicate_approval: () => ({
+    title: "Already approved",
+    description: "You already approved this ticket — it's waiting on another approver.",
+  }),
+}
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -108,16 +141,17 @@ export default function ApproveByLink() {
   }
 
   if (!preview.actionable) {
+    // Mirrors the portal's approve-reject-actions.tsx: explain why the
+    // confirm button isn't offered instead of just failing on click.
+    const { title, description } = BLOCKED_MESSAGES[preview.blockedReason ?? "already_actioned"](
+      preview,
+    )
     return (
       <Shell>
         <CardHeader className="items-center text-center">
           <ShieldCheck className="mb-2 h-10 w-10 text-muted-foreground" />
-          <CardTitle>Already actioned</CardTitle>
-          <CardDescription>
-            <span className="font-medium">{preview.subject}</span> is no longer pending approval
-            (status: <TicketStatusBadge status={preview.status} />). No action needed — sign in to
-            the portal for the full history.
-          </CardDescription>
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{description}</CardDescription>
         </CardHeader>
       </Shell>
     )
