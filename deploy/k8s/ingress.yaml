@@ -1,3 +1,23 @@
+# Path-based split between the two pods. This is what replaces main.py's
+# in-process _mount_spa(): the backend no longer serves the SPA, so the
+# ingress is now the single place that decides API-vs-static.
+#
+# Both pods sit behind ONE host on purpose. The browser therefore still sees a
+# single origin, so the httpOnly session cookie keeps working untouched and no
+# CORS configuration is needed anywhere. Splitting the SPA onto its own
+# hostname would force SameSite=None + an explicit CORS allowlist — a real
+# security regression for no benefit.
+#
+# The three backend prefixes mirror frontend/vite.config.ts's dev proxy, which
+# is the authoritative list of what the API owns:
+#   /api          — human session routes + agent SigV4 routes
+#   /mcp          — Streamable HTTP MCP endpoint (main.py's ASGI dispatcher)
+#   /.well-known  — OAuth protected-resource metadata for MCP clients
+# Miss any of them and IDE OAuth discovery breaks in a way that surfaces as an
+# opaque 404 from nginx rather than an auth error.
+#
+# Longer prefixes win in ingress-nginx, so "/" safely catches everything else
+# (/, /login, /tickets/:id, /act) and hands it to the SPA.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -18,10 +38,31 @@ spec:
     - host: approval-gate.internal.example.com
       http:
         paths:
-          - path: /
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: mcp-approval-gate
+                port:
+                  number: 80
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-approval-gate
+                port:
+                  number: 80
+          - path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-approval-gate
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-approval-gate-frontend
                 port:
                   number: 80

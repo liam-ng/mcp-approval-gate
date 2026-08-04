@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A **blocking approval gate**: an AI agent (AWS MCP server) must create a change-request ticket, wait for human approval in a web portal, execute exactly the approved parameters, and report the result, before it's allowed to mutate EC2. Tickets are immutable — editing a submitted ticket creates a *superseding* ticket and marks the original `DEPRECATED`, preserving full lineage for audit.
 
-Single deployable: FastAPI serves both `/api/*` and the built React SPA out of one container (`backend/app/main.py:_mount_spa`).
+Two deployables: `backend/Dockerfile` (FastAPI, serves `/api/*`, `/mcp`, `/.well-known`) and `frontend/Dockerfile` (Vite build served by nginx). The **ingress** splits traffic by path — both pods sit behind one host, so the browser sees a single origin and the session cookie works with no CORS setup. `backend/app/main.py:_mount_spa` still exists and early-returns when `app/static` is absent (which it is in the backend image), so it's now only a local-dev convenience: `npm run build` then `uvicorn` still serves the SPA from one process without needing two containers.
 
 `docs/plan.md` is the living design doc — checkboxes and a dated decision log are updated at the end of every phase/change. Read it for the full rationale behind anything below. (There is also a stale root-level `plan.md` from the very first commit — `docs/plan.md` is the one that's kept current.)
 
@@ -36,7 +36,8 @@ Dev-mode login (no IdP needed, `AUTH_MODE=dev`, refused when `ENV=production`):
 
 Docker / k8s:
 ```bash
-docker build -t REGISTRY/mcp-approval-gate:TAG .
+docker build -t REGISTRY/mcp-approval-gate-backend:TAG ./backend
+docker build -t REGISTRY/mcp-approval-gate-frontend:TAG ./frontend
 kubectl apply --dry-run=client -f deploy/k8s/
 ```
 
@@ -79,7 +80,7 @@ React 19 + Vite + TypeScript strict, shadcn/ui + Tailwind, brand tokens mirrored
 Everything is `pydantic-settings`, validated at import time — invalid/missing env crashes at boot rather than on first request. Cross-field checks enforce e.g. `AUTH_MODE=dev` never in `ENV=production`, `STORE_BACKEND=dynamodb` requires `DYNAMODB_TABLE`, `STORE_BACKEND=s3` requires `S3_BUCKET`. `.env.example` documents every scenario (dev vs oidc, each OIDC provider, each store backend) as commented-out alternatives — keep it in sync when adding new env vars.
 
 ### Deployment (`deploy/k8s/`)
-Single replica, `strategy: Recreate` (RWO PVC + single-writer JSONL store), IRSA ServiceAccount, `/api/healthz` probes, TLS-mandatory Ingress (SigV4 identity headers must never traverse plaintext). `istio-authorizationpolicy.yaml` + `deploy/scp/` isolate the upstream AWS API MCP server so this gate is the only legitimate caller — see `docs/mcp-gateway.md`.
+Split into `backend-deployment.yaml` / `backend-service.yaml` and `frontend-deployment.yaml` / `frontend-service.yaml`, with `ingress.yaml` routing `/api`, `/mcp`, `/.well-known` to the backend and everything else to the frontend (that prefix list mirrors `frontend/vite.config.ts`'s dev proxy — keep them in sync). Backend: single replica, `strategy: Recreate` (RWO PVC + single-writer JSONL store), IRSA ServiceAccount, `/api/healthz` probes. Frontend: stateless, `RollingUpdate`, no ServiceAccount and no secrets. TLS-mandatory Ingress (SigV4 identity headers must never traverse plaintext). The backend Deployment's selector is deliberately the bare `app: mcp-approval-gate` label — selectors are immutable, and `istio-authorizationpolicy.yaml`'s NetworkPolicy grants upstream-MCP access on exactly that label, so the frontend's distinct label correctly excludes it. `istio-authorizationpolicy.yaml` + `deploy/scp/` isolate the upstream AWS API MCP server so this gate is the only legitimate caller — see `docs/mcp-gateway.md`.
 
 ## Key invariants to preserve
 

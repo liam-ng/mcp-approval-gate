@@ -5,13 +5,21 @@ metadata:
   namespace: mcp-approval-gate
   labels:
     app: mcp-approval-gate
+    component: backend
 spec:
   # Single replica is REQUIRED with STORE_BACKEND=jsonl (RWO PVC, single-writer
   # store, in-memory replay cache). Recreate prevents two pods double-mounting
   # during a rollout. Scale out only after moving to DynamoDB + shared cache.
+  # (The frontend has no such constraint — see frontend-deployment.yaml.)
   replicas: 1
   strategy:
     type: Recreate
+  # Selector deliberately left as the bare `app` label rather than adding
+  # `component: backend`: Deployment selectors are immutable, so changing it
+  # would need a delete/recreate, and istio-authorizationpolicy.yaml's
+  # NetworkPolicy grants access to the upstream aws-api-mcp-server based on
+  # exactly this label. The backend is the only pod that may reach it — the
+  # frontend uses its own label and is correctly excluded.
   selector:
     matchLabels:
       app: mcp-approval-gate
@@ -19,6 +27,7 @@ spec:
     metadata:
       labels:
         app: mcp-approval-gate
+        component: backend
     spec:
       serviceAccountName: mcp-approval-gate
       securityContext:
@@ -27,7 +36,7 @@ spec:
         fsGroup: 1001
       containers:
         - name: gate
-          image: REGISTRY/mcp-approval-gate:latest # set by CI
+          image: REGISTRY/mcp-approval-gate-backend:latest # set by CI
           ports:
             - containerPort: 8000
           envFrom:
