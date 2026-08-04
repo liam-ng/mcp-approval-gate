@@ -93,6 +93,33 @@ class CloseTicketRequest(ApiModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class ApprovalLinkPreview(ApiModel):
+    """What the unauthenticated /act landing page (api/approval_link_actions.py)
+    shows before the approver confirms — enough to make an informed decision,
+    same as the portal's ticket detail page, without exposing anything beyond
+    what was already put in the notification email."""
+
+    ticket_id: str
+    subject: str
+    status: TicketStatus
+    planned_date: date
+    planned_action: str
+    action_details: ActionDetails
+    proposed_by: str
+    action: Literal["approve", "reject"]
+    # False once the ticket has moved on (already approved/rejected/expired/
+    # superseded by someone else, or by this same link) -- the landing page
+    # uses this to show a "no longer actionable" state instead of a form.
+    actionable: bool
+
+
+class ApprovalLinkActionRequest(ApiModel):
+    # Only required (and only validated) when the link's action is "reject" —
+    # mirrors RejectRequest's min length so the portal and the email link
+    # hold approvers to the same bar for a rejection reason.
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class TicketDetailResponse(ApiModel):
     ticket: Ticket
     lineage: list[Ticket]

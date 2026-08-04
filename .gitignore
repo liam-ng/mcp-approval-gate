@@ -24,3 +24,4 @@ data/
 .DS_Store
 
 docs/*
+deploy/k8s/liam-dev

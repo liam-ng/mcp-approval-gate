@@ -52,6 +52,11 @@ def create_app(mcp_app: Starlette | None = None) -> FastAPI:
     human_auth.install(app, settings)
     app.include_router(tickets_router)
 
+    # Email-link path (signed token, no session) — see auth/approval_links.py.
+    from app.api.approval_link_actions import router as approval_link_router
+
+    app.include_router(approval_link_router)
+
     install_error_handlers(app)
     install_middleware(app)
 

@@ -3,6 +3,7 @@ import { BrowserRouter, Outlet, Route, Routes } from "react-router-dom"
 import { Toaster } from "sonner"
 import { Header } from "@/components/layout/header"
 import { Sidebar } from "@/components/layout/sidebar"
+import ApproveByLink from "@/routes/approve-by-link"
 import Dashboard from "@/routes/dashboard"
 import Login from "@/routes/login"
 import TicketDetail from "@/routes/ticket-detail"
@@ -34,6 +35,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/act" element={<ApproveByLink />} />
           <Route element={<Shell />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/tickets" element={<Tickets />} />

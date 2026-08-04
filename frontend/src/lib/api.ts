@@ -1,4 +1,4 @@
-import type { Me, Ticket, TicketDetail, TicketList, TicketStatus } from "./types"
+import type { ApprovalLinkPreview, Me, Ticket, TicketDetail, TicketList, TicketStatus } from "./types"
 
 export class ApiError extends Error {
   constructor(
@@ -86,6 +86,16 @@ export const api = {
 
   close: (id: string, reason?: string) =>
     request<Ticket>(`/api/tickets/${id}/close`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason || null }),
+    }),
+
+  // Signed email-link approve/reject — no session, token stands in for one.
+  previewByLink: (token: string) =>
+    request<ApprovalLinkPreview>(`/api/tickets/by-link/${token}`),
+
+  actByLink: (token: string, reason?: string) =>
+    request<ApprovalLinkPreview>(`/api/tickets/by-link/${token}`, {
       method: "POST",
       body: JSON.stringify({ reason: reason || null }),
     }),

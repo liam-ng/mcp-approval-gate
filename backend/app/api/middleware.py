@@ -1,4 +1,8 @@
-"""Request logging + a small in-process rate limiter for /api/agent/*.
+"""Request logging + a small in-process rate limiter for unauthenticated-ish
+surfaces: /api/agent/* (SigV4, but verification itself costs a forwarded STS
+call) and /api/tickets/by-link/* (a signed token instead of a session —
+nothing stops a scraper from hammering it looking for a valid one, however
+unlikely that is against itsdangerous' HMAC).
 
 Deliberately dependency-free (stdlib logging, sliding window in memory) —
 sound for the single-replica MVP; swap for a shared limiter when scaling out.
@@ -16,6 +20,8 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger("gate.access")
 
 AGENT_PREFIX = "/api/agent/"
+APPROVAL_LINK_PREFIX = "/api/tickets/by-link/"
+RATE_LIMITED_PREFIXES = (AGENT_PREFIX, APPROVAL_LINK_PREFIX)
 RATE_LIMIT_MAX = 60          # requests
 RATE_LIMIT_WINDOW = 60.0     # seconds
 
@@ -42,7 +48,7 @@ def install_middleware(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def access_log_and_rate_limit(request: Request, call_next):
-        if request.url.path.startswith(AGENT_PREFIX):
+        if request.url.path.startswith(RATE_LIMITED_PREFIXES):
             client = request.client.host if request.client else "unknown"
             if not limiter.allow(client):
                 return JSONResponse(

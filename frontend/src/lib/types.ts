@@ -107,3 +107,18 @@ export interface Me {
   role: "approver" | "viewer"
   approvalTtlHours: number
 }
+
+// What the unauthenticated /act landing page gets from a signed email link
+// (backend/app/api/approval_link_actions.py) — a token stands in for a
+// session, so this is intentionally a smaller shape than TicketDetail.
+export interface ApprovalLinkPreview {
+  ticketId: string
+  subject: string
+  status: TicketStatus
+  plannedDate: string
+  plannedAction: string
+  actionDetails: ActionDetails
+  proposedBy: string
+  action: "approve" | "reject"
+  actionable: boolean
+}
