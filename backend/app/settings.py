@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     # --- Workflow ---
     required_approvals: int = 1
     approval_ttl_hours: int = 72
+    # Off by default: the four-eyes principle ("approver != proposer",
+    # core/service.py's _assert_actionable_by) is a deliberate invariant, not
+    # an accident. Only relevant when a *human* is the proposer -- MCP-created
+    # and supersede/edit tickets -- since agent-created tickets always have
+    # proposed_by = the agent's own ARN, which can never match a human email.
+    # Intended for small/solo deployments where a second human approver
+    # genuinely doesn't exist, not as a routine bypass.
+    allow_self_approval: bool = False
 
     # --- Storage ---
     store_backend: Literal["jsonl", "s3", "dynamodb"] = "jsonl"

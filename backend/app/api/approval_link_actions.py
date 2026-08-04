@@ -59,7 +59,7 @@ def _blocked_reason(ticket: Ticket, link: LinkPayload, settings: Settings) -> Bl
         return "already_actioned"
     if link.email.lower() not in settings.approver_email_list:
         return "not_approver"
-    if ticket.proposed_by.lower() == link.email.lower():
+    if not settings.allow_self_approval and ticket.proposed_by.lower() == link.email.lower():
         return "self_approval"
     if link.action == "approve" and any(
         a.approved_by.lower() == link.email.lower() for a in ticket.approvals
@@ -114,12 +114,18 @@ async def act(token: str, payload: ApprovalLinkActionRequest, repo: Repo):
 
     if link.action == "approve":
         ticket = await service.approve_ticket(
-            repo, link.ticket_id, link.email, settings.required_approvals
+            repo,
+            link.ticket_id,
+            link.email,
+            settings.required_approvals,
+            allow_self_approval=settings.allow_self_approval,
         )
     else:
         reason = (payload.reason or "").strip()
         if len(reason) < 5:
             raise MissingReason("a rejection reason of at least 5 characters is required")
-        ticket = await service.reject_ticket(repo, link.ticket_id, link.email, reason)
+        ticket = await service.reject_ticket(
+            repo, link.ticket_id, link.email, reason, allow_self_approval=settings.allow_self_approval
+        )
 
     return _to_preview(ticket, link, "already_actioned")

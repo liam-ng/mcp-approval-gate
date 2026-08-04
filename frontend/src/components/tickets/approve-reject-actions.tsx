@@ -2,8 +2,9 @@
 // is in flight — the portal approval-list.tsx pattern, without the bulk.
 import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Check, Loader2, X } from "lucide-react"
+import { Check, Clock, Info, Loader2, ShieldAlert, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -56,26 +57,75 @@ export function ApproveRejectActions({ ticket, me }: { ticket: Ticket; me: Me })
   const alreadyApproved = ticket.approvals.some(
     (a) => a.approvedBy.toLowerCase() === me.email.toLowerCase(),
   )
+  // These three are mutually exclusive and render in the same slot, so they
+  // share the callout treatment — a plain line of text next to a callout in
+  // the same position reads as an inconsistency rather than a hierarchy.
   if (me.role !== "approver") {
-    return <p className="text-sm text-muted-foreground">Approver role is required to action this ticket.</p>
+    return (
+      <Alert variant="info">
+        <ShieldAlert />
+        <div className="space-y-1">
+          <AlertTitle>Approver role required</AlertTitle>
+          <AlertDescription>
+            Your account has the viewer role, so you can review this ticket but not approve or
+            reject it.
+          </AlertDescription>
+        </div>
+      </Alert>
+    )
   }
-  if (isProposer) {
-    return <p className="text-sm text-muted-foreground">You proposed this ticket — a peer or manager must approve it.</p>
+  if (isProposer && !me.allowSelfApproval) {
+    return (
+      <Alert variant="info">
+        <Info />
+        <div className="space-y-1">
+          <AlertTitle>You proposed this ticket</AlertTitle>
+          <AlertDescription>
+            A peer or manager must approve it — the proposer can't approve or reject their own
+            change request.
+          </AlertDescription>
+        </div>
+      </Alert>
+    )
   }
   if (alreadyApproved) {
-    return <p className="text-sm text-muted-foreground">You already approved this ticket — waiting for another approver.</p>
+    return (
+      <Alert variant="info">
+        <Clock />
+        <div className="space-y-1">
+          <AlertTitle>You already approved this ticket</AlertTitle>
+          <AlertDescription>
+            Waiting for another approver before the agent can execute it.
+          </AlertDescription>
+        </div>
+      </Alert>
+    )
   }
 
   return (
-    <div className="flex gap-2">
-      <Button variant="success" disabled={busy} onClick={() => setConfirmOpen("approve")}>
-        {approve.isPending ? <Loader2 className="animate-spin" /> : <Check />}
-        Approve
-      </Button>
-      <Button variant="destructive" disabled={busy} onClick={() => setConfirmOpen("reject")}>
-        {reject.isPending ? <Loader2 className="animate-spin" /> : <X />}
-        Reject
-      </Button>
+    <div className="flex flex-col gap-2">
+      {isProposer && (
+        <Alert variant="warning">
+          <TriangleAlert />
+          <div className="space-y-1">
+            <AlertTitle>Self-approval enabled</AlertTitle>
+            <AlertDescription>
+              You proposed this ticket. This gate has <code>ALLOW_SELF_APPROVAL</code> turned on, so
+              you can approve your own request — the usual peer review is being bypassed.
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
+      <div className="flex gap-2">
+        <Button variant="success" disabled={busy} onClick={() => setConfirmOpen("approve")}>
+          {approve.isPending ? <Loader2 className="animate-spin" /> : <Check />}
+          Approve
+        </Button>
+        <Button variant="destructive" disabled={busy} onClick={() => setConfirmOpen("reject")}>
+          {reject.isPending ? <Loader2 className="animate-spin" /> : <X />}
+          Reject
+        </Button>
+      </div>
 
       <Dialog open={confirmOpen === "approve"} onOpenChange={(o) => !o && setConfirmOpen(null)}>
         <DialogContent>

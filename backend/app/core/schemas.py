@@ -142,3 +142,6 @@ class MeResponse(ApiModel):
     # (createdAt/lastApproval + this), mirroring app/jobs/expiry.py's own
     # cutoff, without a separate config round trip.
     approval_ttl_hours: int
+    # ALLOW_SELF_APPROVAL (settings.py) — lets approve-reject-actions.tsx
+    # skip its proposer block instead of showing buttons that would 403.
+    allow_self_approval: bool

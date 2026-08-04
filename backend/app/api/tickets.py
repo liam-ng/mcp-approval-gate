@@ -70,14 +70,26 @@ async def get_ticket(ticket_id: str, _: User, repo: Repo):
 
 @router.post("/{ticket_id}/approve", response_model=Ticket, response_model_by_alias=True)
 async def approve(ticket_id: str, user: Approver, repo: Repo):
+    settings = get_settings()
     return await service.approve_ticket(
-        repo, ticket_id, user.email, get_settings().required_approvals
+        repo,
+        ticket_id,
+        user.email,
+        settings.required_approvals,
+        allow_self_approval=settings.allow_self_approval,
     )
 
 
 @router.post("/{ticket_id}/reject", response_model=Ticket, response_model_by_alias=True)
 async def reject(ticket_id: str, payload: RejectRequest, user: Approver, repo: Repo):
-    return await service.reject_ticket(repo, ticket_id, user.email, payload.reason)
+    settings = get_settings()
+    return await service.reject_ticket(
+        repo,
+        ticket_id,
+        user.email,
+        payload.reason,
+        allow_self_approval=settings.allow_self_approval,
+    )
 
 
 @router.post("/{ticket_id}/supersede", response_model=Ticket, response_model_by_alias=True)

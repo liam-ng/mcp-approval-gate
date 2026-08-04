@@ -21,12 +21,13 @@ from tests.test_agent_api import create_payload
 def make_client(tmp_path, monkeypatch):
     """Factory so tests can pick REQUIRED_APPROVALS before app creation."""
 
-    def _make(required_approvals: int = 1):
+    def _make(required_approvals: int = 1, allow_self_approval: bool = False):
         monkeypatch.setenv("SESSION_SECRET", "test-secret")
         monkeypatch.setenv("AUTH_MODE", "dev")
         monkeypatch.setenv("GATE_SERVER_ID", "approval-gate-test")
         monkeypatch.setenv("ALLOWED_AGENT_ARNS", "arn:aws:iam::123456789012:role/mcp-*")
         monkeypatch.setenv("REQUIRED_APPROVALS", str(required_approvals))
+        monkeypatch.setenv("ALLOW_SELF_APPROVAL", str(allow_self_approval))
         settings_module._settings = None
 
         test_app = FastAPI()
@@ -73,6 +74,7 @@ def test_me_returns_role(make_client):
         "name": "Dev User",
         "role": "viewer",
         "approvalTtlHours": 72,
+        "allowSelfApproval": False,
     }
 
 
@@ -183,6 +185,17 @@ def test_editor_cannot_approve_own_supersede(make_client):
     # A different approver can.
     login(client, "someone-else@example.com")
     assert client.post(f"/api/tickets/{new['ticketId']}/approve").status_code == 200
+
+
+def test_self_approval_allowed_when_toggled_on(make_client):
+    client = make_client(allow_self_approval=True)
+    old_id = seed_agent_ticket(client)
+    login(client, "editor@example.com")
+    new = client.post(f"/api/tickets/{old_id}/supersede", json=create_payload()).json()
+
+    r = client.post(f"/api/tickets/{new['ticketId']}/approve")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "APPROVED"
 
 
 def test_update_tags_appends_audit_event_without_superseding(make_client):

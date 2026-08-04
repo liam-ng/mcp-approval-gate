@@ -231,22 +231,27 @@ async def report_execution_result(
 # --- human operations -------------------------------------------------------
 
 
-def _assert_actionable_by(ticket: Ticket, email: str) -> None:
+def _assert_actionable_by(ticket: Ticket, email: str, *, allow_self_approval: bool = False) -> None:
     if ticket.superseded_by:
         raise TicketSuperseded(f"ticket superseded by {ticket.superseded_by}")
-    if ticket.proposed_by.lower() == email.lower():
+    if not allow_self_approval and ticket.proposed_by.lower() == email.lower():
         raise ApproverIsProposer("the proposer cannot approve or reject their own ticket")
 
 
 async def approve_ticket(
-    repo: TicketRepository, ticket_id: str, approver_email: str, required_approvals: int
+    repo: TicketRepository,
+    ticket_id: str,
+    approver_email: str,
+    required_approvals: int,
+    *,
+    allow_self_approval: bool = False,
 ) -> Ticket:
     ticket = await repo.get_ticket(ticket_id)
     if ticket is None:
         raise TicketNotFound(f"ticket {ticket_id} not found")
     if ticket.status != "PENDING_APPROVAL":
         raise InvalidTicketState(f"ticket is {ticket.status}, not PENDING_APPROVAL")
-    _assert_actionable_by(ticket, approver_email)
+    _assert_actionable_by(ticket, approver_email, allow_self_approval=allow_self_approval)
     if any(a.approved_by.lower() == approver_email.lower() for a in ticket.approvals):
         raise DuplicateApprover("this approver has already approved the ticket")
 
@@ -265,14 +270,19 @@ async def approve_ticket(
 
 
 async def reject_ticket(
-    repo: TicketRepository, ticket_id: str, approver_email: str, reason: str
+    repo: TicketRepository,
+    ticket_id: str,
+    approver_email: str,
+    reason: str,
+    *,
+    allow_self_approval: bool = False,
 ) -> Ticket:
     ticket = await repo.get_ticket(ticket_id)
     if ticket is None:
         raise TicketNotFound(f"ticket {ticket_id} not found")
     if ticket.status != "PENDING_APPROVAL":
         raise InvalidTicketState(f"ticket is {ticket.status}, not PENDING_APPROVAL")
-    _assert_actionable_by(ticket, approver_email)
+    _assert_actionable_by(ticket, approver_email, allow_self_approval=allow_self_approval)
     assert_transition(ticket.status, "REJECTED", "human")
     event = _event(
         ticket, ticket.seq + 1, "REJECTED", Actor(kind="human", id=approver_email),

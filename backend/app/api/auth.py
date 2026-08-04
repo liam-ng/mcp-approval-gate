@@ -94,6 +94,7 @@ def install(app: FastAPI, settings: Settings) -> None:
             name=user.name,
             role=user.role,
             approval_ttl_hours=settings.approval_ttl_hours,
+            allow_self_approval=settings.allow_self_approval,
         )
 
 

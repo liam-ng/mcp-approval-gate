@@ -110,13 +110,19 @@ def test_session_cookie_secret_cannot_be_replayed_as_a_link_token():
 
 @pytest.fixture()
 def make_client(tmp_path, monkeypatch):
-    def _make(*, approver_emails: str = APPROVER, approval_ttl_hours: int = 72):
+    def _make(
+        *,
+        approver_emails: str = APPROVER,
+        approval_ttl_hours: int = 72,
+        allow_self_approval: bool = False,
+    ):
         monkeypatch.setenv("SESSION_SECRET", "test-secret")
         monkeypatch.setenv("AUTH_MODE", "dev")
         monkeypatch.setenv("GATE_SERVER_ID", "approval-gate-test")
         monkeypatch.setenv("ALLOWED_AGENT_ARNS", "arn:aws:iam::123456789012:role/mcp-*")
         monkeypatch.setenv("APPROVER_EMAILS", approver_emails)
         monkeypatch.setenv("APPROVAL_TTL_HOURS", str(approval_ttl_hours))
+        monkeypatch.setenv("ALLOW_SELF_APPROVAL", str(allow_self_approval))
         settings_module._settings = None
 
         test_app = FastAPI()
@@ -272,6 +278,20 @@ def test_proposer_cannot_approve_own_ticket_via_link(make_client):
     r = client.post(f"/api/tickets/by-link/{token}", json={})
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "APPROVER_IS_PROPOSER"
+
+
+def test_proposer_can_approve_own_ticket_via_link_when_allowed(make_client):
+    client = make_client(approver_emails=f"{APPROVER},{AGENT_ARN}", allow_self_approval=True)
+    tid = seed_ticket(client)  # proposed_by == AGENT_ARN
+    token = token_for("approve", tid, AGENT_ARN)
+
+    preview = client.get(f"/api/tickets/by-link/{token}").json()
+    assert preview["actionable"] is True
+    assert preview["blockedReason"] is None
+
+    r = client.post(f"/api/tickets/by-link/{token}", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "APPROVED"
 
 
 def test_revoked_approver_link_rejected(make_client):

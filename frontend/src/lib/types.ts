@@ -106,6 +106,7 @@ export interface Me {
   name?: string | null
   role: "approver" | "viewer"
   approvalTtlHours: number
+  allowSelfApproval: boolean
 }
 
 // What the unauthenticated /act landing page gets from a signed email link
