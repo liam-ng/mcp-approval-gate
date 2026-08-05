@@ -52,7 +52,7 @@ jobs:
       - if: steps.cfg.outputs.enabled != 'true'
         run: echo "::warning::SONAR_TOKEN not set — skipping SonarQube scan."
       - if: steps.cfg.outputs.enabled == 'true'
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v6
         with:
           projectBaseDir: backend
         env:
