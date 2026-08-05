@@ -5,8 +5,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO_ROOT
 
-# Override to build without an ACR, e.g. REGISTRY=local
-export REGISTRY="${REGISTRY:-liammcp-fxb8azcnexhncbd9.azurecr.io}"
+# The ACR login server, e.g. REGISTRY=myacr-abc123.azurecr.io. Deliberately
+# not defaulted to a real registry: a stale hardcoded host silently produces an
+# image ref nothing built or pushed, which surfaces as a confusing pull-auth
+# error rather than "you forgot to set REGISTRY". `local` builds without one.
+export REGISTRY="${REGISTRY:-local}"
 
 # Immutable tag deployments pin; Tag format: <registry>/mcp-approval-gate-<dev|main>:<sha>
 export IMAGE_TAG="${IMAGE_TAG:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)}"
