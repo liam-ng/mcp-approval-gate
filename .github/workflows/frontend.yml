@@ -107,8 +107,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history for blame/new-code
-      - uses: SonarSource/sonarqube-scan-action@v4
+          fetch-depth: 0 # Sonar needs full history for blame/new-code
+      # `secrets` isn't available in a job-level `if`, so gate on a step output
+      # instead: without SONAR_TOKEN this no-ops rather than failing.
+      - id: cfg
+        run: echo "enabled=${{ secrets.SONAR_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.cfg.outputs.enabled != 'true'
+        run: echo "::warning::SONAR_TOKEN not set — skipping SonarQube scan."
+      - if: steps.cfg.outputs.enabled == 'true'
+        uses: SonarSource/sonarqube-scan-action@v6
         with:
           projectBaseDir: frontend
         env:
