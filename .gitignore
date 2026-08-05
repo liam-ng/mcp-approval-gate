@@ -23,5 +23,7 @@ data/
 .idea/
 .DS_Store
 
-docs/*
-deploy/k8s/liam-dev
+# Docs & local-only deploy overlay
+.claude/
+docs/
+deploy/k8s/liam-dev/
