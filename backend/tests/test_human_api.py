@@ -16,6 +16,8 @@ from app.repo.jsonl_store import JsonlTicketRepository
 from tests.conftest import AGENT_ARN
 from tests.test_agent_api import create_payload
 
+EXECUTOR_ARN = "arn:aws:iam::123456789012:role/mcp-executor"
+
 
 @pytest.fixture()
 def make_client(tmp_path, monkeypatch):
@@ -49,6 +51,19 @@ def seed_agent_ticket(client) -> str:
 
     async def _create():
         ticket, _ = await service.create_agent_ticket(client.repo, payload, AGENT_ARN, None)
+        return ticket
+
+    return anyio.run(_create).ticket_id
+
+
+def seed_mcp_ticket(client, proposer_email="liam.ng") -> str:
+    """A human-proposed ticket, so `owner` resolves to a person, not an ARN."""
+    payload = TicketCreateRequest.model_validate(create_payload())
+
+    async def _create():
+        ticket, _ = await service.create_mcp_ticket(
+            client.repo, payload, proposer_email, EXECUTOR_ARN, None
+        )
         return ticket
 
     return anyio.run(_create).ticket_id
@@ -342,8 +357,17 @@ def test_list_filters(make_client):
     assert len(approved["items"]) == 1
     assert approved["items"][0]["ticketId"] == tid1
 
-    tagged = client.get("/api/tickets", params={"tag": "owner=liam.ng"}).json()
-    assert len(tagged["items"]) == 2
+    # `team` is caller-supplied (create_payload); `owner` is gate-assigned from
+    # proposed_by, so it is a human email only for a human-proposed ticket and
+    # the agent's ARN otherwise. Both kinds of tag must be filterable.
+    seed_mcp_ticket(client, "liam.ng")
+
+    tagged = client.get("/api/tickets", params={"tag": "team=gti"}).json()
+    assert len(tagged["items"]) == 3
+    owned = client.get("/api/tickets", params={"tag": "owner=liam.ng"}).json()
+    assert len(owned["items"]) == 1
+    agent_owned = client.get("/api/tickets", params={"tag": f"owner={AGENT_ARN}"}).json()
+    assert len(agent_owned["items"]) == 2
     assert client.get("/api/tickets", params={"tag": "team=other"}).json()["items"] == []
 
 
