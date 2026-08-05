@@ -1,0 +1,77 @@
+# Replaces the old ingress.yaml — ingress-nginx is retired; routing is Gateway
+# API on F5 NGINX Gateway Fabric (NGF).
+#
+# This app owns ONLY the HTTPRoute. It attaches to a shared, platform-owned
+# Gateway rather than provisioning its own: NGF runs one NGINX data plane
+# Deployment + Service per Gateway resource, so a per-app Gateway would mean a
+# second data plane (and a second load balancer) for no isolation this app
+# actually needs. Adjust the parentRef below to the cluster's shared Gateway —
+# it is NOT created by this repo.
+#
+# The routing intent is unchanged from the ingress it replaces. Both pods still
+# sit behind ONE hostname on purpose: the browser sees a single origin, so the
+# httpOnly session cookie keeps working untouched and no CORS configuration is
+# needed anywhere. Splitting the SPA onto its own hostname would force
+# SameSite=None + an explicit CORS allowlist — a real security regression for
+# no benefit.
+#
+# The three backend prefixes mirror frontend/vite.config.ts's dev proxy, which
+# is the authoritative list of what the API owns:
+#   /api          — human session routes + agent SigV4 routes
+#   /mcp          — Streamable HTTP MCP endpoint (main.py's ASGI dispatcher)
+#   /.well-known  — OAuth protected-resource metadata for MCP clients
+# Miss any of them and IDE OAuth discovery breaks in a way that surfaces as an
+# opaque 404 from NGINX rather than an auth error.
+#
+# Rule ordering is NOT significant: Gateway API mandates that the longest
+# PathPrefix wins regardless of document order, so the "/" catch-all safely
+# picks up everything else (/, /login, /tickets/:id, /act) and hands it to the
+# SPA. PathPrefix also matches whole path segments, so "/api" matches /api and
+# /api/... but never /apifoo.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-approval-gate
+  namespace: mcp-approval-gate
+spec:
+  parentRefs:
+    # ADJUST: name/namespace of the cluster's shared Gateway. Its listener must
+    # allow routes from this namespace (`allowedRoutes.namespaces.from: All`,
+    # or a Selector matching it) — otherwise the route silently fails to attach
+    # and shows a NotAllowedByListeners condition in its status.
+    - name: shared-gateway
+      namespace: nginx-gateway
+      # TLS is mandatory here: agent SigV4 identity headers and session cookies
+      # must never traverse plaintext. Attach ONLY to an HTTPS listener, and
+      # leave the HTTP->HTTPS redirect to the platform that owns the Gateway.
+      sectionName: https
+  hostnames:
+    - approval-gate.internal.example.com
+  rules:
+    # Multiple matches within one rule are OR'd, which keeps the three
+    # API-owned prefixes expressed as the single unit they actually are.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+        - path:
+            type: PathPrefix
+            value: /mcp
+        - path:
+            type: PathPrefix
+            value: /.well-known
+      backendRefs:
+        - name: mcp-approval-gate
+          port: 80
+      # NOTE: /mcp is a Streamable HTTP (SSE) endpoint with long-lived
+      # responses. HTTPRoute `rules[].timeouts` is NOT implemented by NGF — it
+      # is accepted and silently ignored — so do not rely on it to hold the
+      # stream open. If NGF's default proxy_read_timeout truncates MCP
+      # sessions, raise it with an NGF SnippetsFilter (extensionRef filter).
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: mcp-approval-gate-frontend
+          port: 80

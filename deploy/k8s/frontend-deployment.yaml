@@ -1,6 +1,6 @@
 # SPA pod: nginx serving the built Vite bundle. Stateless — no PVC, no env,
-# no secrets. Everything it needs to reach the API goes through the ingress
-# (see ingress.yaml), so it holds no configuration of its own.
+# no secrets. Everything it needs to reach the API goes through the shared
+# Gateway (see httproute.yaml), so it holds no configuration of its own.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

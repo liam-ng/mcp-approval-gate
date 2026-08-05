@@ -35,7 +35,7 @@ Single container: FastAPI serves `/api/*` and the built React SPA.
 ```
 frontend/   React 19 + Vite + shadcn/ui + TanStack Query/Table (portal brand tokens)
 backend/    FastAPI + Pydantic v2; core domain, repo layer, auth, SES notifier, /mcp gateway
-deploy/k8s/ Deployment (1 replica, Recreate), PVC, IRSA ServiceAccount, Ingress (TLS), Istio isolation
+deploy/k8s/ Deployment (1 replica, Recreate), PVC, IRSA ServiceAccount, HTTPRoute (TLS), Istio isolation
 deploy/scp/ AWS Organizations SCP restricting mutating EC2 actions to the gate's executor role
 ```
 
@@ -84,7 +84,7 @@ cd frontend && npm run build           # includes tsc --noEmit
 
 ```bash
 docker build -t REGISTRY/mcp-approval-gate:TAG .
-kubectl apply -f deploy/k8s/           # edit configmap/secret/ingress first
+kubectl apply -f deploy/k8s/           # edit configmap/secret/httproute first
 ```
 
 Secrets (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`) should come from External
