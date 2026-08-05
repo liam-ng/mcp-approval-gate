@@ -41,15 +41,12 @@ jobs:
       - run: ./pipelines/backend/ci.sh test
 
   sonar:
-    name: SonarQube (CWE gate)
+    name: SonarQube SAST (CWE gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Sonar needs full history for blame/new-code
-      # `secrets` isn't available in a job-level `if`, so gate on a step output
-      # instead: without SONAR_TOKEN this no-ops rather than failing, so the
-      # rest of the pipeline is usable before Sonar is configured.
+          fetch-depth: 0 # full history for Sonar blame/new-code
       - id: cfg
         run: echo "enabled=${{ secrets.SONAR_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
       - if: steps.cfg.outputs.enabled != 'true'
@@ -61,8 +58,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }} # omit for SonarCloud
-      # Hard gate — fails if the project's Quality Gate fails. Configure the
-      # gate in Sonar itself (Blocker/Critical CWE issues -> fail).
+      # Hard gate — Blocker/Critical CWE issues -> fail
       - if: steps.cfg.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
@@ -70,14 +66,11 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   image:
-    name: Build, scan, smoke, push
+    name: Build, DAST scan, smoke, push
     runs-on: ubuntu-latest
     needs: [test, sonar]
     permissions:
-      # Required for azure/login's OIDC federation — this is what replaces a
-      # stored service-principal secret. Managed identity proper only works on
-      # Azure-hosted compute; workload identity federation is the secretless
-      # equivalent for GitHub-hosted runners.
+      # Required for azure/login's OIDC federation
       id-token: write
       contents: read
     steps:
@@ -88,16 +81,18 @@ jobs:
       - run: ./pipelines/backend/ci.sh smoke
 
       # PRs build, scan and smoke test but never publish.
-      - name: Azure login (OIDC, no stored secret)
+      - name: Azure login (OIDC federated)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: az acr login --name "${REGISTRY%%.*}"
+        
       - name: Push
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:

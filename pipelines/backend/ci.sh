@@ -5,9 +5,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 COMPONENT=backend
 
 cmd_test() {
+  # MUST run from backend/ -- pyproject.toml sets asyncio_mode="auto" there, so
+  # from the repo root every async test fails
   log "pytest"
-  # MUST run from backend/ -- pyproject.toml sets asyncio_mode="auto" there,
-  # and running from the repo root makes every async test fail.
   cd "$REPO_ROOT/backend"
   python -m pip install --quiet -e ".[dev]"
   python -m pytest -q
@@ -17,9 +17,10 @@ cmd_build() { build_image "$COMPONENT"; }
 cmd_scan()  { scan_image  "$COMPONENT"; }
 cmd_push()  { push_image  "$COMPONENT"; }
 
-# "Does it actually start" test -- catches the class of break unit tests
-# can't: a bad CMD, a missing runtime dep, the wrong non-root UID.
 cmd_smoke() {
+  # "Does it actually start" -- catches a bad CMD, a missing runtime dep;
+  # assert GET / is 404 so a leaked static/ can't fight httproute.yaml for
+  # routing; assert UID 1001;
   local ref name
   ref="$(image_ref "$COMPONENT")"
   name="smoke-backend-$$"
@@ -39,9 +40,6 @@ cmd_smoke() {
   curl -fsS http://localhost:18000/api/healthz | grep -q '"status":"ok"' \
     || fail "healthz did not report ok"
 
-  # The backend must NOT serve the SPA any more -- the ingress does that split
-  # (deploy/k8s/ingress.yaml). A 200 here means a static/ dir leaked into the
-  # image and the two would silently fight over routing.
   log "backend does not serve the SPA"
   local code
   code="$(http_code http://localhost:18000/)"

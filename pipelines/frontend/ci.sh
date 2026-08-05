@@ -5,9 +5,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 COMPONENT=frontend
 
 cmd_test() {
+  # `npm run build` is both the type check and the build, can fail an type error
   log "tsc --noEmit && vite build"
-  # `npm run build` is both the type check and the build, so a type error
-  # fails here rather than shipping a broken bundle.
   cd "$REPO_ROOT/frontend"
   npm ci --no-audit --no-fund
   npm run build
@@ -18,6 +17,8 @@ cmd_scan()  { scan_image  "$COMPONENT"; }
 cmd_push()  { push_image  "$COMPONENT"; }
 
 cmd_smoke() {
+  # start container, poll readiness; check /api/healthz body;
+  # assert GET / is 404 so other static/ routes can't leak in; assert UID 101;
   local ref name
   ref="$(image_ref "$COMPONENT")"
   name="smoke-frontend-$$"
@@ -27,10 +28,6 @@ cmd_smoke() {
   docker run -d --name "$name" -p 18080:8080 "$ref" >/dev/null
   wait_for http://localhost:18080/ frontend
 
-  # Every client-side route must fall back to index.html -- react-router
-  # resolves them in the browser, there's no file on disk. /act especially:
-  # it's the email approve/reject landing page, reached by people with no
-  # session, so a 404 there is a silently broken approval path.
   log "SPA fallback for client-side routes"
   local path code
   for path in / /login /tickets/abc "/act?token=x"; do
