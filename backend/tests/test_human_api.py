@@ -56,7 +56,7 @@ def seed_agent_ticket(client) -> str:
     return anyio.run(_create).ticket_id
 
 
-def seed_mcp_ticket(client, proposer_email="liam.ng") -> str:
+def seed_mcp_ticket(client, proposer_email="liam") -> str:
     """A human-proposed ticket, so `owner` resolves to a person, not an ARN."""
     payload = TicketCreateRequest.model_validate(create_payload())
 
@@ -360,11 +360,11 @@ def test_list_filters(make_client):
     # `team` is caller-supplied (create_payload); `owner` is gate-assigned from
     # proposed_by, so it is a human email only for a human-proposed ticket and
     # the agent's ARN otherwise. Both kinds of tag must be filterable.
-    seed_mcp_ticket(client, "liam.ng")
+    seed_mcp_ticket(client, "liam")
 
     tagged = client.get("/api/tickets", params={"tag": "team=gti"}).json()
     assert len(tagged["items"]) == 3
-    owned = client.get("/api/tickets", params={"tag": "owner=liam.ng"}).json()
+    owned = client.get("/api/tickets", params={"tag": "owner=liam"}).json()
     assert len(owned["items"]) == 1
     agent_owned = client.get("/api/tickets", params={"tag": f"owner={AGENT_ARN}"}).json()
     assert len(agent_owned["items"]) == 2

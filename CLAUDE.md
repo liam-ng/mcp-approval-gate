@@ -12,7 +12,7 @@ Two deployables: `backend/Dockerfile` (FastAPI, serves `/api/*`, `/mcp`, `/.well
 
 ## Commands
 
-Backend (Python 3.12, from `backend/`):
+Backend (Python 3.14, from `backend/`):
 ```bash
 pip install -e ".[dev]"
 cp ../.env.example .env

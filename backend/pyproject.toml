@@ -2,7 +2,7 @@
 name = "mcp-approval-gate"
 version = "0.1.0"
 description = "Blocking approval gate adding auditability and traceability to AWS changes made by an AI agent (MCP server)"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]

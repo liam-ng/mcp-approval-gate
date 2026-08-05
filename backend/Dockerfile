@@ -1,6 +1,6 @@
 # Backend image: FastAPI only — no SPA build stage, no static/ directory.
 # Build context is ./backend
-FROM python:slim AS runtime
+FROM python:3.14-slim AS runtime
 WORKDIR /srv
 
 # Copy only the requirements first so this layer is cached until deps change.
