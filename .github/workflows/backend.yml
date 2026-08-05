@@ -169,6 +169,32 @@ jobs:
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
+      # Reports everything the gate below does NOT fail on: HIGH severity, and
+      # CRITICALs with no fix yet. Runs first and never fails, so the report
+      # exists even when the gate stops the run.
+      - name: Output Trivy report and upload as artifact
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          format: table
+          output: trivy-backend.txt
+
+      - name: Publish Trivy report in summary
+        run: |
+          {
+            echo "### Trivy — backend \`${IMAGE_TAG}\`"
+            echo '```'
+            head -c 900000 trivy-backend.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: trivy-backend-${{ env.IMAGE_TAG }}
+          path: trivy-backend.txt
+
       # Hard gate: exit-code 1 fails before any push. ignore-unfixed is
       # deliberate — an unfixable base-image CVE can't be actioned here.
       - name: Trivy scan
@@ -179,6 +205,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           format: table
+          skip-setup-trivy: true
 
       # Reference to cmd_smoke()
       # start container, poll readiness; check /api/healthz body; assert GET / is 404 so a leaked static/ can't fight httproute.yaml for routing; assert UID 1001;
