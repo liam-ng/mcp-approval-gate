@@ -1,22 +1,14 @@
 # MCP Approval Gate
 
 A **blocking approval gate** that adds auditability, traceability, and human
-control to changes an AI agent (AWS MCP server) makes on AWS. Before any
-mutating EC2 action, the agent must create a change-request ticket, wait for
-human approval in the web portal, execute exactly the approved parameters, and
-report the result.
+control to changes an AI agent (AWS MCP server). Before any mutating action, the agent must create a change-request ticket, wait for
+human approval through mail or web portal, execute exactly the approved parameters, and report the result.
 
-- **Immutable tickets** — every change is an appended audit event; editing a
-  submitted ticket creates a *superseding* ticket and marks the original
-  `DEPRECATED`, preserving the full lineage.
-- **Human auth**: provider-agnostic OIDC (IAM Identity Center or Entra ID).
-- **Agent auth**: IAM SigV4 via presigned `sts:GetCallerIdentity` — no shared
-  secrets.
-- **Approval rules**: 1 or 2 required approvals,
-  approvers must be distinct and never the proposer.
-- **Storage**: JSONL append-log on a PVC (MVP) behind a repository interface
-  shaped for **DynamoDB** or **S3 + Object Lock (WORM)**.
-- **IDE distribution**: end users add *this gate* to Cursor/VS Code as a
+- **Audit Trail** — every change is an appended audit event (local or append-only S3 bucket or dynamoDB).
+- **AWS Cognito Identities**: provider-agnostic OIDC (user pool or IAM Identity Center or Entra ID).
+- **Agent auth**: IAM SigV4 via presigned `sts:GetCallerIdentity` — no shared secrets.
+- **Approval rules**: 1 or 2 tiers of required approvals, approvers must be distinct other than the proposer.
+- **IDE distribution**: end users add *this gate* to Cursor/VS Code as a 
   remote MCP tool (`/mcp`, OAuth2.1) — never the upstream AWS MCP server
   directly, which is network-isolated (Istio) and SCP-restricted so it's
   unreachable any other way.

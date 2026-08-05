@@ -1,12 +1,7 @@
-# Thin orchestration only — the logic lives in pipelines/backend/ci.sh so it
-# runs locally and isn't locked into this CI system. GitHub Actions can only
-# execute workflows from .github/workflows/, which is why this file isn't in
-# pipelines/ alongside the script it calls.
 name: Backend
 
 # Path filters keep the two components independent: a frontend-only change
-# never rebuilds or republishes the backend image. Duplicated rather than
-# shared via a YAML anchor because GitHub Actions does not support anchors.
+# never rebuilds or republishes the backend image.
 on:
   push:
     branches: [main]
@@ -24,43 +19,111 @@ on:
       - ".github/workflows/backend.yml"
   workflow_dispatch:
 
-env:
-  REGISTRY: liammcp-fxb8azcnexhncbd9.azurecr.io
-
 jobs:
+  # Fails on missing required secrets
+  verify-configs:
+    name: Verify secrets and config
+    runs-on: ubuntu-latest
+    environment: liam-dev
+    outputs:
+      sonar: ${{ steps.cfg.outputs.sonar }}
+    steps:
+      - id: cfg
+        env:
+          REGISTRY_ENDPOINT: ${{ secrets.REGISTRY_ENDPOINT }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+        # require() Hard and note() Soft gate functions are used to check if the required secrets are configured
+        # 2 stages for Required and Optional secrets
+        run: |
+          missing=0
+          require() {
+            if [ -z "${!1:-}" ]; then
+              echo "::error::Required secret $1 is not configured — $2"
+              echo "- ❌ \`$1\` is not configured — $2" >> "$GITHUB_STEP_SUMMARY"
+              missing=1
+            else
+              echo "  ok       $1"
+            fi
+          }
+          note() {
+            if [ -n "${!1:-}" ]; then
+              echo "  ok       $1"
+            else
+              echo "::warning::$1 not set — $2"
+              echo "- ⚠️ \`$1\` not set — $2" >> "$GITHUB_STEP_SUMMARY"
+              return 1
+            fi
+          }
+
+          echo "--------------------------------"
+          echo "Required Secrets:"
+          echo "--------------------------------"
+          require REGISTRY_ENDPOINT "liam-dev environment secret; the image tag is built from it"
+          require AZURE_CLIENT_ID "azure/login OIDC federation, needed to push to ACR"
+          require AZURE_TENANT_ID "azure/login OIDC federation, needed to push to ACR"
+          require AZURE_SUBSCRIPTION_ID "azure/login OIDC federation, needed to push to ACR"
+
+          echo "--------------------------------"
+          echo "Optional Secrets:"
+          echo "--------------------------------"
+          # note()'s exit status drives the output the sonar job gates on — an
+          # output that is never written reads as '' and would skip sonar
+          # silently, so both branches write it explicitly.
+          if note SONAR_TOKEN "skipping SonarQube scan"; then
+            echo "sonar=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sonar=false" >> "$GITHUB_OUTPUT"
+          fi
+          note SONAR_HOST_URL "SonarCloud assumed" || true
+
+          [ "$missing" -eq 0 ] || { echo "::error::Configure the missing secrets in the liam-dev environment or at repo level, then re-run."; exit 1; }
+
   test:
     name: Unit tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # pytest MUST run from backend/ — pyproject.toml sets asyncio_mode="auto"
+        # there, so from the repo root every async test fails.
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - run: ./pipelines/backend/ci.sh test
+          # Both files: requirements.txt holds the runtime deps, the [dev]
+          # extras installed below are declared in pyproject itself.
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/pyproject.toml
+      - run: | #./pipelines/backend/ci.sh test
+          python -m pip install --quiet -e ".[dev]"
+          python -m pytest -q
 
+  # Hard gate: SonarQube scan is required to pass before the image is built
+  # Configure quality gate on SonarCloud to control pass/fail criteria
   sonar:
     name: SonarQube SAST (CWE gate)
     runs-on: ubuntu-latest
+    needs: verify-configs
+    if: needs['verify-configs'].outputs.sonar == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history for Sonar blame/new-code
-      - id: cfg
-        run: echo "enabled=${{ secrets.SONAR_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
-      - if: steps.cfg.outputs.enabled != 'true'
-        run: echo "::warning::SONAR_TOKEN not set — skipping SonarQube scan."
-      - if: steps.cfg.outputs.enabled == 'true'
-        uses: SonarSource/sonarqube-scan-action@v4
+          fetch-depth: 0 # full history for blame/new-code
+      - uses: SonarSource/sonarqube-scan-action@v4
         with:
           projectBaseDir: backend
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }} # omit for SonarCloud
-      # Hard gate — Blocker/Critical CWE issues -> fail
-      - if: steps.cfg.outputs.enabled == 'true'
-        uses: SonarSource/sonarqube-quality-gate-action@v1
+      - uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -68,16 +131,52 @@ jobs:
   image:
     name: Build, DAST scan, smoke, push
     runs-on: ubuntu-latest
-    needs: [test, sonar]
+    needs: [verify-configs, test, sonar]
+    # `always()` lets this run when sonar was skipped for a missing token;
+    if: >-
+      always()
+      && needs['verify-configs'].result == 'success'
+      && needs.test.result == 'success'
+      && (needs.sonar.result == 'success' || needs.sonar.result == 'skipped')
+    environment: liam-dev
     permissions:
-      # Required for azure/login's OIDC federation
       id-token: write
       contents: read
+    env:
+      REGISTRY: ${{ secrets.REGISTRY_ENDPOINT }}
     steps:
       - uses: actions/checkout@v4
-      - run: ./pipelines/backend/ci.sh build
-      - uses: aquasecurity/setup-trivy@v0.2.0
-      - run: ./pipelines/backend/ci.sh scan
+
+      - name: Resolve image ref
+        run: |
+          tag="$(git rev-parse --short HEAD)"
+          echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=${REGISTRY}/mcp-approval-gate-backend:${tag}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          # Context is ./backend; Reference to the Dockerfile;
+          context: ./backend
+          load: true # into the local daemon — scan and smoke both need it there
+          tags: ${{ env.IMAGE_REF }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      # Hard gate: exit-code 1 fails before any push. ignore-unfixed is
+      # deliberate — an unfixable base-image CVE can't be actioned here.
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      # Reference to cmd_smoke()
+      # start container, poll readiness; check /api/healthz body; assert GET / is 404 so a leaked static/ can't fight httproute.yaml for routing; assert UID 1001;
       - run: ./pipelines/backend/ci.sh smoke
 
       # PRs build, scan and smoke test but never publish.
@@ -92,8 +191,8 @@ jobs:
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: az acr login --name "${REGISTRY%%.*}"
-        
-      - name: Push
+
+      - name: Push Image to ACR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           MOVING_TAG: main
