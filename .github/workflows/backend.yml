@@ -30,7 +30,7 @@ jobs:
     steps:
       - id: cfg
         env:
-          REGISTRY_ENDPOINT: ${{ secrets.REGISTRY_ENDPOINT }}
+          REGISTRY_NAME: ${{ secrets.REGISTRY_NAME }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -63,7 +63,7 @@ jobs:
           echo "--------------------------------"
           echo "Required Secrets:"
           echo "--------------------------------"
-          require REGISTRY_ENDPOINT "liam-dev environment secret; the image tag is built from it"
+          require REGISTRY_NAME "liam-dev environment secret; the image tag is built from it"
           require AZURE_CLIENT_ID "azure/login OIDC federation, needed to push to ACR"
           require AZURE_TENANT_ID "azure/login OIDC federation, needed to push to ACR"
           require AZURE_SUBSCRIPTION_ID "azure/login OIDC federation, needed to push to ACR"
@@ -148,7 +148,7 @@ jobs:
       id-token: write
       contents: read
     env:
-      REGISTRY: ${{ secrets.REGISTRY_ENDPOINT }}
+      REGISTRY_NAME: ${{ secrets.REGISTRY_NAME }}
     steps:
       - uses: actions/checkout@v4
 
@@ -156,7 +156,7 @@ jobs:
         run: |
           tag="$(git rev-parse --short HEAD)"
           echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
-          echo "IMAGE_REF=${REGISTRY}/mcp-approval-gate-backend:${tag}" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=${REGISTRY_NAME}/mcp-approval-gate-backend:${tag}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v4
       - name: Build
@@ -222,7 +222,7 @@ jobs:
 
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: az acr login --name "${REGISTRY%%.*}"
+        run: az acr login --name "${REGISTRY_NAME%%.*}"
 
       - name: Push Image to ACR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
