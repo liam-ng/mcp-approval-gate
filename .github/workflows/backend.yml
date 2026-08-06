@@ -149,8 +149,8 @@ jobs:
       contents: read
     env:
       # The ACR login server. REGISTRY is the variable name pipelines/lib.sh
-      # reads, so ci.sh computes the same ref that was built here; `az acr
-      # login` takes it too and strips the suffix to get the registry name.
+      # reads, so ci.sh computes the same ref that was built here. The ACR
+      # login step strips .azurecr.io to pass the registry name to az acr login.
       REGISTRY: ${{ secrets.REGISTRY_ENDPOINT }}
     steps:
       - uses: actions/checkout@v4
@@ -225,7 +225,7 @@ jobs:
 
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: az acr login --name "$REGISTRY"
+        run: az acr login --name "${REGISTRY%.azurecr.io}"
 
       - name: Push Image to ACR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
