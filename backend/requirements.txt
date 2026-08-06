@@ -1,15 +1,15 @@
 # Runtime dependencies — single source of truth.
 # pyproject.toml reads this file (dynamic dependencies) and the Dockerfile
 # installs from it, so the lists cannot drift.
-fastapi>=0.141
-uvicorn[standard]>=0.52
-pydantic>=2.13
-pydantic-settings>=2.14
-authlib>=1.7
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.1
+pydantic>=2.13.4
+pydantic-settings>=2.14.2
+authlib>=1.7.2
 itsdangerous>=2.2
-httpx>=0.28
-boto3>=1.43
-python-ulid>=4.0
+httpx>=0.28.1
+boto3>=1.43.65
+python-ulid>=4.0.1
 # MCP Streamable HTTP server + OAuth2.1 Resource Server support for /mcp
 # (backend/app/api/mcp_gateway.py). Pinned to the 2.x line this was built
 # and tested against — the SDK's public API has moved fast (FastMCP was

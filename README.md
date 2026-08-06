@@ -4,13 +4,15 @@ A **blocking approval gate** that adds auditability, traceability, and human
 control to changes an AI agent (AWS MCP server). Before any mutating action, the agent must create a change-request ticket, wait for
 human approval through mail or web portal, execute exactly the approved parameters, and report the result.
 
+## Features
+
 - **Audit Trail** — every change is an appended audit event (local or append-only S3 bucket or dynamoDB).
+- **Approval rules**: 1 or 2 tiers of required approvals, approvers must be distinct other than the proposer.
+- **IDE distribution**: this serves as a MCP tool to Cursor/VS Code via Streamable HTTP with OAuth2.1
+
 - **AWS Cognito Identities**: provider-agnostic OIDC (user pool or IAM Identity Center or Entra ID).
 - **Agent auth**: IAM SigV4 via presigned `sts:GetCallerIdentity` — no shared secrets.
-- **Approval rules**: 1 or 2 tiers of required approvals, approvers must be distinct other than the proposer.
-- **IDE distribution**: end users add *this gate* to Cursor/VS Code as a 
-  remote MCP tool (`/mcp`, OAuth2.1) — never the upstream AWS MCP server
-  directly, which is network-isolated (Istio) and SCP-restricted so it's
+- **Network Isolation**: never the upstream AWS MCP server directly, which is network-isolated (Istio) and SCP-restricted so it's
   unreachable any other way.
 
 Note that this is a monolithic design as MVP project.
@@ -75,7 +77,7 @@ cd frontend && npm run build           # includes tsc --noEmit
 ## Deployment
 
 ```bash
-docker build -t REGISTRY/mcp-approval-gate:TAG .
+docker build -t <REGISTRY>/mcp-approval-gate:TAG .
 kubectl apply -f deploy/k8s/           # edit configmap/secret/httproute first
 ```
 
