@@ -216,10 +216,14 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
+      - run: az account show
+      - run: az acr show -n liammcp
+      - run: az role assignment list \
+        --assignee ${{ secrets.AZURE_OBJECT_ID }} \
+        --scope $(az acr show -n liammcp --query id -o tsv)
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: az acr login --name "${REGISTRY%.azurecr.io}"
+        run: az acr login --name "${REGISTRY}"
 
       - name: Push Image to ACR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
