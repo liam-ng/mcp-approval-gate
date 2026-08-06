@@ -227,8 +227,14 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: az acr login --name "${REGISTRY%.azurecr.io}"
 
+      # Re-runs the Build step's action with push instead of load. Every layer is a cache hit from that step
       - name: Push Image to ACR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          MOVING_TAG: main
-        run: ./pipelines/backend/ci.sh push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_REF }}
+            ${{ env.REGISTRY }}/mcp-approval-gate-backend:main
+          cache-from: type=gha,scope=backend
