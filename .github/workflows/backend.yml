@@ -138,6 +138,17 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      # SonarCloud already hosts the full report — link to it rather than
+      # duplicating it here. always() so the link is present on the runs that
+      # matter most: the ones where the gate above failed.
+      - name: Link SonarQube dashboard in summary
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        run: |
+          {
+            echo "### SonarQube — backend"
+            echo "[View analysis on SonarCloud](https://sonarcloud.io/summary/new_code?id=liam-ng_mcp-approval-gate&branch=main)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   image:
     name: Build, DAST scan, smoke, push
     runs-on: ubuntu-latest
@@ -189,6 +200,19 @@ jobs:
           format: table
           output: trivy-backend.txt
 
+      # Same scan in Trivy's native JSON — the table is for humans, this is what
+      # downstream tooling can parse. skip-setup-trivy reuses the binary and DB
+      # the step above already fetched.
+      - name: Output Trivy report as JSON
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          format: json
+          output: trivy-backend.json
+          skip-setup-trivy: true
+
       - name: Publish Trivy report in summary
         run: |
           {
@@ -201,7 +225,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: trivy-backend-${{ env.IMAGE_TAG }}
-          path: trivy-backend.txt
+          path: |
+            trivy-backend.txt
+            trivy-backend.json
 
       # Hard gate: exit-code 1 fails before any push. ignore-unfixed is
       # deliberate — an unfixable base-image CVE can't be actioned here.
