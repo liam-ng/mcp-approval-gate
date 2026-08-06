@@ -225,7 +225,7 @@ jobs:
 
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: az acr login --name "${REGISTRY%.azurecr.io}"
+        run: az acr login --name "${REGISTRY}"
 
       # Re-runs the Build step's action with push instead of load. Every layer is a cache hit from that step
       - name: Push Image to ACR
