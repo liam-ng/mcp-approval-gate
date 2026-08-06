@@ -71,8 +71,8 @@ jobs:
           echo "--------------------------------"
           echo "Optional Secrets:"
           echo "--------------------------------"
-          # note()'s exit status drives the output the sonar job gates on — an
-          # output that is never written reads as '' and would skip sonar
+          # note()'s exit status drives the output the sonarqube job gates on —
+          # an output that is never written reads as '' and would skip sonarqube
           # silently, so both branches write it explicitly.
           if note SONAR_TOKEN "skipping SonarQube scan"; then
             echo "sonar=true" >> "$GITHUB_OUTPUT"
@@ -136,13 +136,13 @@ jobs:
   image:
     name: Build, DAST scan, smoke, push
     runs-on: ubuntu-latest
-    needs: [verify-configs, test, sonar]
-    # `always()` lets this run when sonar was skipped for a missing token;
+    needs: [verify-configs, test, sonarqube]
+    # `always()` lets this run when sonarqube was skipped for a missing token;
     if: >-
       always()
       && needs['verify-configs'].result == 'success'
       && needs.test.result == 'success'
-      && (needs.sonar.result == 'success' || needs.sonar.result == 'skipped')
+      && (needs.sonarqube.result == 'success' || needs.sonarqube.result == 'skipped')
     environment: liam-dev
     permissions:
       id-token: write

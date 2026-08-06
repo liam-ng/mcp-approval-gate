@@ -131,13 +131,13 @@ jobs:
   image:
     name: Build, scan, smoke, push
     runs-on: ubuntu-latest
-    needs: [verify-configs, test, sonar]
-    # `always()` lets this run when sonar was skipped for a missing token;
+    needs: [verify-configs, test, sonarqube]
+    # `always()` lets this run when sonarqube was skipped for a missing token;
     if: >-
       always()
       && needs['verify-configs'].result == 'success'
       && needs.test.result == 'success'
-      && (needs.sonar.result == 'success' || needs.sonar.result == 'skipped')
+      && (needs.sonarqube.result == 'success' || needs.sonarqube.result == 'skipped')
     environment: liam-dev
     permissions:
       id-token: write
