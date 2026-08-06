@@ -9,7 +9,7 @@
 import { useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { CheckCircle2, Loader2, ShieldCheck, XCircle } from "lucide-react"
-import { useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DataTable } from "@/components/tickets/ticket-table"

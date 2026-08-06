@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { addHours, format } from "date-fns"
 import { ArrowLeft } from "lucide-react"
-import { Link, useParams } from "react-router-dom"
+import { Link, useParams } from "react-router"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"

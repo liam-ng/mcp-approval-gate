@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { BrowserRouter, Outlet, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Outlet, Route, Routes } from "react-router"
 import { Toaster } from "sonner"
 import { Header } from "@/components/layout/header"
 import { Sidebar } from "@/components/layout/sidebar"

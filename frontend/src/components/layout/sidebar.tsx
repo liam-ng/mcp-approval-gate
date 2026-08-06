@@ -1,5 +1,5 @@
 // Trimmed from the portal's sidebar: two sections, no admin gating needed yet.
-import { NavLink } from "react-router-dom"
+import { NavLink } from "react-router"
 import { LayoutDashboard, TicketCheck, ShieldCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 
