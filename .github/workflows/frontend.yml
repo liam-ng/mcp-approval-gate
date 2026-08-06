@@ -35,7 +35,7 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
           # require() Hard and note() Soft gate functions are used to check if the required secrets are configured
           # 2 stages for Required and Optional secrets
@@ -122,7 +122,7 @@ jobs:
           projectBaseDir: frontend
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }} # omit for SonarCloud
+          # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }} # omit for SonarCloud
       - uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
