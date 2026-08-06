@@ -87,10 +87,12 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          # Same channel as frontend/Dockerfile's node:lts-alpine build stage,
+          # so `npm run build` here and in the image run on one Node version.
+          node-version: "lts/*"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: | #./pipelines/frontend/ci.sh test
@@ -105,7 +107,7 @@ jobs:
     needs: verify-configs
     if: needs['verify-configs'].outputs.sonar == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Sonar needs full history for blame/new-code
       # `secrets` isn't available in a job-level `if`, so gate on a step output
@@ -115,7 +117,7 @@ jobs:
       - if: steps.cfg.outputs.enabled != 'true'
         run: echo "::warning::SONAR_TOKEN not set — skipping SonarQube scan."
       - if: steps.cfg.outputs.enabled == 'true'
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@v8
         with:
           projectBaseDir: frontend
         env:
@@ -146,7 +148,7 @@ jobs:
       # login step strips .azurecr.io to pass the registry name to az acr login.
       REGISTRY: ${{ secrets.REGISTRY_ENDPOINT }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve image ref
         run: |
@@ -209,7 +211,7 @@ jobs:
       # PRs build, scan and smoke test but never publish.
       - name: Azure login (OIDC, no stored secret)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
