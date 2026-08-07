@@ -61,7 +61,7 @@ spec:
             type: PathPrefix
             value: /.well-known
       backendRefs:
-        - name: mcp-approval-gate
+        - name: mcp-approval-gate-backend
           port: 80
       # NOTE: /mcp is a Streamable HTTP (SSE) endpoint with long-lived
       # responses. HTTPRoute `rules[].timeouts` is NOT implemented by NGF — it

@@ -1,7 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mcp-approval-gate
+  # Object name only -- this is what pod names are derived from. The `app` label
+  # below stays bare on purpose; see the selector comment.
+  name: mcp-approval-gate-backend
   namespace: mcp-approval-gate
   labels:
     app: mcp-approval-gate
@@ -29,7 +31,7 @@ spec:
         app: mcp-approval-gate
         component: backend
     spec:
-      serviceAccountName: mcp-approval-gate
+      serviceAccountName: mcp-approval-gate-backend
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -41,9 +43,9 @@ spec:
             - containerPort: 8000
           envFrom:
             - configMapRef:
-                name: mcp-approval-gate
+                name: mcp-approval-gate-backend
             - secretRef:
-                name: mcp-approval-gate
+                name: mcp-approval-gate-backend
           volumeMounts:
             - name: data
               mountPath: /data
