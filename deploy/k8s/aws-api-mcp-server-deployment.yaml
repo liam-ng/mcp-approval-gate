@@ -82,6 +82,15 @@ spec:
                   key: GATE_SERVER_ID
             - name: STS_REGION
               value: us-east-1
+            # Poll cadence (executor/app/settings.py). Worst-case latency from
+            # "approved" to "executing" is INTERVAL + JITTER, so these are the
+            # only knobs that trade approval-to-execution lag against load on
+            # the gate. Jitter exists for a multi-replica future the executor
+            # does not have yet -- 0 is fine at one replica.
+            - name: POLL_INTERVAL_SECONDS
+              value: "20"
+            - name: POLL_JITTER_SECONDS
+              value: "5"
             # Flip to "false" to arm it. Left on so that applying this manifest
             # cannot, by itself, mutate anything.
             - name: DRY_RUN
