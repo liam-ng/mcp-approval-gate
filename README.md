@@ -29,9 +29,20 @@ Single container: FastAPI serves `/api/*` and the built React SPA.
 ```
 frontend/   React 19 + Vite + shadcn/ui + TanStack Query/Table (portal brand tokens)
 backend/    FastAPI + Pydantic v2; core domain, repo layer, auth, SES notifier, /mcp gateway
-deploy/k8s/ Deployment (1 replica, Recreate), PVC, IRSA ServiceAccount, HTTPRoute (TLS), Istio isolation
+executor/   Headless poller that performs approved tickets
+deploy/iam/ IRSA trust policy + inline policy for the executor role
 deploy/scp/ AWS Organizations SCP restricting mutating EC2 actions to the gate's executor role
 ```
+
+**Kubernetes manifests live in a different repo**:
+[`liam-ng/liam-dev-k8s-argoCD`](https://github.com/liam-ng/liam-dev-k8s-argoCD),
+under `apps/mcp-approval-gate/` (kustomize `base/` + `overlays/liam-dev` +
+`overlays/template`), reconciled by Argo CD. They used to be `deploy/k8s/` here.
+Only the AWS JSON policy documents above stayed behind — nothing reconciles those.
+
+One cross-repo coupling to keep in mind: `frontend/vite.config.ts`'s dev-proxy
+prefix list (`/api`, `/mcp`, `/.well-known`) must stay in step with that repo's
+`base/httproute.yaml`. Change one, change the other.
 
 ## Ticket lifecycle
 
@@ -76,13 +87,27 @@ cd frontend && npm run build           # includes tsc --noEmit
 
 ## Deployment
 
+Three images, one per deployable, built and pushed by their own workflows on
+merge to `main`:
+
 ```bash
-docker build -t <REGISTRY>/mcp-approval-gate:TAG .
-kubectl apply -f deploy/k8s/           # edit configmap/secret/httproute first
+docker build -t <REGISTRY>/mcp-approval-gate-backend:TAG ./backend
+docker build -t <REGISTRY>/mcp-approval-gate-frontend:TAG ./frontend
+docker build -t <REGISTRY>/mcp-approval-gate-executor:TAG ./executor
 ```
 
-Secrets (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`) should come from External
-Secrets / Sealed Secrets — `deploy/k8s/secret.yaml` is a template only.
+Rollout is GitOps, not `kubectl`: Argo CD reconciles
+[`liam-ng/liam-dev-k8s-argoCD`](https://github.com/liam-ng/liam-dev-k8s-argoCD)
+`apps/mcp-approval-gate/overlays/liam-dev`. To render or drift-check from a
+clone of that repo:
+
+```bash
+kubectl kustomize apps/mcp-approval-gate/overlays/liam-dev | kubectl diff -f -
+```
+
+Secrets (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`) come from Azure Key Vault via
+External Secrets — see that overlay's `eso-*.yaml`. No secret value belongs in
+either repo.
 
 ## Security notes
 

@@ -34,11 +34,18 @@ npm run build         # tsc --noEmit && vite build — this is the frontend "che
 Dev-mode login (no IdP needed, `AUTH_MODE=dev`, refused when `ENV=production`):
 `GET /api/auth/login?email=you@x.com&role=approver`
 
-Docker / k8s:
+Docker:
 ```bash
 docker build -t REGISTRY/mcp-approval-gate-backend:TAG ./backend
 docker build -t REGISTRY/mcp-approval-gate-frontend:TAG ./frontend
-kubectl apply --dry-run=client -f deploy/k8s/
+docker build -t REGISTRY/mcp-approval-gate-executor:TAG ./executor
+```
+
+k8s manifests are **not in this repo** — see the Deployment section below. From a
+clone of the manifest repo:
+```bash
+kubectl kustomize apps/mcp-approval-gate/overlays/liam-dev | kubectl diff -f -   # drift check
+kubectl kustomize apps/mcp-approval-gate/overlays/template | kubectl apply --dry-run=client -f -
 ```
 
 Environment note: in this WSL sandbox, Node is only on PATH after `export PATH="$HOME/.nvm/versions/node/v24.18.1/bin:$PATH"`, and `pip install` needs `--break-system-packages`.
@@ -79,8 +86,14 @@ React 19 + Vite + TypeScript strict, shadcn/ui + Tailwind, brand tokens mirrored
 ### Settings (`backend/app/settings.py`)
 Everything is `pydantic-settings`, validated at import time — invalid/missing env crashes at boot rather than on first request. Cross-field checks enforce e.g. `AUTH_MODE=dev` never in `ENV=production`, `STORE_BACKEND=dynamodb` requires `DYNAMODB_TABLE`, `STORE_BACKEND=s3` requires `S3_BUCKET`. `.env.example` documents every scenario (dev vs oidc, each OIDC provider, each store backend) as commented-out alternatives — keep it in sync when adding new env vars.
 
-### Deployment (`deploy/k8s/`)
-Split into `backend-deployment.yaml` / `backend-service.yaml` and `frontend-deployment.yaml` / `frontend-service.yaml`, with `httproute.yaml` routing `/api`, `/mcp`, `/.well-known` to the backend and everything else to the frontend (that prefix list mirrors `frontend/vite.config.ts`'s dev proxy — keep them in sync). Backend: single replica, `strategy: Recreate` (RWO PVC + single-writer JSONL store), IRSA ServiceAccount, `/api/healthz` probes. Frontend: stateless, `RollingUpdate`, no ServiceAccount and no secrets. The route attaches to a **shared, platform-owned Gateway** — never add a Gateway here: NGF provisions one NGINX data plane Deployment + Service per Gateway resource, so a per-app Gateway means a second data plane and a second load balancer. Attach only to a TLS listener (SigV4 identity headers must never traverse plaintext); the HTTP→HTTPS redirect belongs to whoever owns the Gateway. Locally (`deploy/k8s/liam-dev/`) that shared Gateway is `localwsl` in the `nginx-gateway` namespace, Helm-managed by the `ngf` release — its `http` listener sets no `hostname` and allows routes `from: All`, so adding a host needs no Gateway edit (which is just as well, since `helm upgrade` would clobber one). The backend Deployment's selector is deliberately the bare `app: mcp-approval-gate` label — selectors are immutable, and `istio-authorizationpolicy.yaml`'s NetworkPolicy grants upstream-MCP access on exactly that label, so the frontend's distinct label correctly excludes it. `istio-authorizationpolicy.yaml` + `deploy/scp/` isolate the upstream AWS API MCP server so this gate is the only legitimate caller — see `docs/mcp-gateway.md`. `networkpolicy.yaml` is the namespace-wide L3/L4 layer: `default-deny-all` on both directions plus an explicit allowlist. Two traps it documents — NetworkPolicy matches the **pod** port (the frontend is Service 80 → pod 8080, so a rule saying `80` denies everything), and default-deny Egress silently breaks DNS, sidecar→istiod, and kubelet probes unless each is allowed by name. It needs a CNI that enforces NetworkPolicy; `liam-dev` runs flannel, which does not, so there it documents intent only.
+### Deployment — manifests live in another repo
+K8s manifests are **not here**. They live in [`liam-ng/liam-dev-k8s-argoCD`](https://github.com/liam-ng/liam-dev-k8s-argoCD) (private, cluster-wide config for the WSL cluster) under `apps/mcp-approval-gate/`, as kustomize `base/` + `overlays/liam-dev` (the real deployed config) + `overlays/template` (production-shaped placeholders, deployed nowhere, no Argo Application). Argo CD reconciles the liam-dev overlay; `kubectl apply` is no longer the deploy path. Only `deploy/iam/` and `deploy/scp/` (AWS JSON policy documents, which nothing reconciles) stayed in this repo.
+
+The split, and why each piece is where it is: `base/` holds the two Deployments + Services, the executor pod, the PVC, the ServiceAccount, the HTTPRoute's *rules*, the AuthorizationPolicy, and the eight environment-neutral NetworkPolicies. Each overlay owns only what genuinely differs — config values, secret source (ESO vs a template Secret), mTLS mode, the HTTPRoute's *attachment* (parentRefs/hostnames), and the gateway-ingress/kubelet-probe NetworkPolicies. Images come from the `images:` transformer, which is what CI rewrites per-sha.
+
+Invariants that survived the move: the backend Deployment's selector is deliberately the bare `app: mcp-approval-gate` label — selectors are immutable, and `authorizationpolicy.yaml`'s NetworkPolicy grants upstream-MCP access on exactly that label, so the frontend's distinct label correctly excludes it. The route attaches to a **shared, platform-owned Gateway** — never add a Gateway: NGF provisions one NGINX data plane Deployment + Service per Gateway resource, so a per-app Gateway means a second data plane and a second load balancer. On liam-dev that Gateway is `localwsl` in `nginx-gateway`, Helm-managed by the `ngf` release, and it runs **hostNetwork** — which is why that overlay's gateway-ingress policies must use `ipBlock` (a hostNetwork pod has no pod IP, so no selector matches it) while the template's use selectors. Neither is a simplification of the other. `httproute.yaml`'s three backend prefixes mirror `frontend/vite.config.ts`'s dev proxy — that coupling now spans two repos, so change both.
+
+NetworkPolicy traps the files document: it matches the **pod** port (the frontend is Service 80 → pod 8080, so a rule saying `80` denies everything), a named port no container declares resolves to nothing and denies everything the same way, and default-deny Egress silently breaks DNS, sidecar→istiod, and kubelet probes unless each is allowed by name. **The cluster now runs Calico, not flannel** — these policies are enforced. They were written when flannel made them inert documentation; do not reason from that.
 
 ## Key invariants to preserve
 
