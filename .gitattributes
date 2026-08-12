@@ -1,0 +1,4 @@
+# Without this, a WSL/Windows checkout rewrites files to CRLF and every one of
+# them shows as modified against an LF index -- which is what was happening to
+# .github/workflows/{backend,frontend}.yml.
+* text=auto eol=lf
