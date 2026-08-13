@@ -34,7 +34,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           DEPLOY_REPO_SSH_KEY: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
           # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
@@ -121,8 +121,10 @@ jobs:
       # instead: without SONAR_TOKEN this no-ops rather than failing.
       - id: cfg
         run: echo "enabled=${{ secrets.SONAR_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
       - if: steps.cfg.outputs.enabled != 'true'
         run: echo "::warning::SONAR_TOKEN not set — skipping SonarQube scan."
+
       - if: steps.cfg.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
         with:

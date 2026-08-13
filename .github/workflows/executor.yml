@@ -34,7 +34,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           DEPLOY_REPO_SSH_KEY: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
           # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
