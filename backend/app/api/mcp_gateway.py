@@ -47,9 +47,9 @@ def build_mcp_app(settings: Settings) -> Starlette:
             "executes anything itself: it opens a ticket that a human approver (never "
             "you) must approve in the web portal before the trusted executor runs it. "
             "Always surface ticketUrl to the user. Use check_ticket_status to follow up. "
-            "If a ticket needs different parameters before it's approved, use "
-            "supersede_change_ticket rather than opening a duplicate — it deprecates the "
-            "old ticket and requires fresh approval. Use close_ticket to withdraw a ticket "
+            "If a ticket needs different parameters, or a failed one needs retrying with "
+            "a fix, use supersede_change_ticket rather than opening a duplicate — it links "
+            "the new ticket to the old one and requires fresh approval. Use close_ticket to withdraw a ticket "
             "that's no longer needed instead of leaving it pending forever."
         ),
         auth=AuthSettings(
@@ -152,10 +152,22 @@ def build_mcp_app(settings: Settings) -> Starlette:
         reason: str | None = None,
         tags: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Edit a previously-created ticket that hasn't executed yet. Tickets
-        are immutable — this deprecates `ticket_id` and creates a new
-        PENDING_APPROVAL ticket in its place, requiring fresh approval. You
-        (the authenticated user) become the new proposer, so you cannot also
+        """Edit a previously-created ticket, or follow up on one that already
+        ran. Tickets are immutable — this creates a new PENDING_APPROVAL ticket
+        linked to `ticket_id`, requiring fresh approval.
+
+        Two cases, both valid:
+        - `ticket_id` is PENDING_APPROVAL or APPROVED (it never ran): it is
+          marked DEPRECATED and replaced.
+        - `ticket_id` is FAILED or CLOSED (it ran): use this to retry a failed
+          change with a fix, or to make a further change to something that
+          succeeded. The old ticket KEEPS its status — a follow-up never
+          rewrites the record of what already happened to AWS.
+
+        REJECTED and EXPIRED tickets cannot be superseded; open a fresh ticket
+        with create_change_ticket instead.
+
+        You (the authenticated user) become the new proposer, so you cannot also
         approve this superseding ticket. Supply the FULL new details, not just
         what changed — this replaces the ticket's action entirely, it does not
         patch individual fields."""

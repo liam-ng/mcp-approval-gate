@@ -11,7 +11,7 @@ from app.api.deps import get_repo
 from app.api.errors import install_error_handlers
 from app.api.tickets import router as tickets_router
 from app.core import service
-from app.core.schemas import TicketCreateRequest
+from app.core.schemas import ExecutionResultRequest, TicketCreateRequest
 from app.repo.jsonl_store import JsonlTicketRepository
 from tests.conftest import AGENT_ARN
 from tests.test_agent_api import create_payload
@@ -72,6 +72,25 @@ def seed_mcp_ticket(client, proposer_email="liam") -> str:
 def login(client, email="peer@example.com", role="approver"):
     r = client.get(f"/api/auth/login?email={email}&role={role}", follow_redirects=False)
     assert r.status_code in (302, 307)
+
+
+def drive_to_execution_outcome(client, ticket_id: str, outcome: str) -> None:
+    """Approve, execute and report, landing the ticket on CLOSED or FAILED.
+    Goes through the service layer directly — this module's app mounts only the
+    human router, and the point here is the resulting status, not agent auth."""
+
+    async def _run():
+        await service.approve_ticket(client.repo, ticket_id, "approver@example.com", 1)
+        ticket = await client.repo.get_ticket(ticket_id)
+        await service.start_execution(
+            client.repo, ticket_id, AGENT_ARN, ticket.action_details.parameters_hash
+        )
+        await service.report_execution_result(
+            client.repo, ticket_id, AGENT_ARN,
+            ExecutionResultRequest(outcome=outcome, message=f"{outcome} in test"),
+        )
+
+    anyio.run(_run)
 
 
 def test_unauthenticated_gets_401(make_client):
@@ -185,6 +204,66 @@ def test_supersede_links_and_deprecates(make_client):
     r = client.post(f"/api/tickets/{old_id}/supersede", json=edited)
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "TICKET_SUPERSEDED"
+
+
+@pytest.mark.parametrize(
+    "outcome,expected_status", [("failure", "FAILED"), ("success", "CLOSED")]
+)
+def test_supersede_of_terminal_ticket_keeps_its_outcome(make_client, outcome, expected_status):
+    """A follow-up to a ticket that already ran must not rewrite what happened:
+    the old ticket keeps FAILED/CLOSED and only gains the supersededBy link."""
+    client = make_client()
+    old_id = seed_agent_ticket(client)
+    drive_to_execution_outcome(client, old_id, outcome)
+    login(client, "editor@example.com")
+
+    r = client.post(f"/api/tickets/{old_id}/supersede", json=create_payload(subject="Retry"))
+    assert r.status_code == 200, r.text
+    new = r.json()
+    assert new["status"] == "PENDING_APPROVAL"  # the follow-up needs its own approval
+    assert new["supersedes"] == old_id
+
+    detail = client.get(f"/api/tickets/{old_id}").json()
+    old = detail["ticket"]
+    assert old["status"] == expected_status  # NOT DEPRECATED
+    assert old["supersededBy"] == new["ticketId"]
+    # The execution record survives the link event untouched.
+    assert old["execution"]["outcome"] == outcome
+    assert [t["ticketId"] for t in detail["lineage"]] == [old_id, new["ticketId"]]
+
+    events = detail["auditEvents"]
+    assert events[-1]["type"] == "SUPERSEDED"
+    assert events[-1]["fromStatus"] == events[-1]["toStatus"] == expected_status
+
+    # Still only supersedable once.
+    assert client.post(f"/api/tickets/{old_id}/supersede", json=create_payload()).status_code == 409
+
+
+@pytest.mark.parametrize("bad_status", ["REJECTED", "EXPIRED"])
+def test_supersede_rejected_from_non_supersedable_terminal_status(make_client, bad_status):
+    """Re-proposing after a rejection or a timeout starts a fresh chain, so
+    these stay refused even though FAILED/CLOSED are now allowed."""
+    client = make_client()
+    tid = seed_agent_ticket(client)
+    login(client)
+    if bad_status == "REJECTED":
+        r = client.post(f"/api/tickets/{tid}/reject", json={"reason": "not needed"})
+        assert r.status_code == 200, r.text
+    else:
+        async def _expire():
+            ticket = await client.repo.get_ticket(tid)
+            event = service._event(
+                ticket, ticket.seq + 1, "EXPIRED", service.Actor(kind="system", id="gate"),
+                from_status=ticket.status, to_status="EXPIRED",
+            )
+            await client.repo.append_event(tid, ticket.seq, event)
+
+        anyio.run(_expire)
+
+    login(client, "editor@example.com")
+    r = client.post(f"/api/tickets/{tid}/supersede", json=create_payload())
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "INVALID_STATE"
 
 
 def test_editor_cannot_approve_own_supersede(make_client):

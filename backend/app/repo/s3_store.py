@@ -11,8 +11,11 @@ mode with a configured retention period, e.g. 1-7 years):
 - Boot: ListObjectsV2 + GetObject, folded with repo.base.apply_event (the
   fold is shared; only the line source differs from jsonl).
 - transact_supersede is two conditional puts (S3 has no transactions); a
-  crash between them leaves a DEPRECATED without its successor, repaired on
-  boot by the same revert rule as jsonl_store._repair_partial_supersede.
+  crash between them leaves a ticket whose superseded_by points at a successor
+  that was never written, repaired on boot by the same revert rule as
+  jsonl_store._repair_partial_supersede. Detect it by the dangling
+  superseded_by, NOT by status == DEPRECATED: superseding a FAILED/CLOSED
+  ticket emits SUPERSEDED and deliberately leaves the status alone.
 - Trade-offs: boot time grows with event count (add a snapshot object later);
   higher read latency than DynamoDB. WORM makes the audit trail tamper-proof
   even against account admins — strongest fit for the compliance goal.

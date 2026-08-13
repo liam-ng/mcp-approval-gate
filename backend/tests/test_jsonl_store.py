@@ -142,6 +142,43 @@ async def test_partial_supersede_repaired_on_boot(repo, tmp_path):
     assert await reopened.get_ticket(new.ticket_id) is None
 
 
+async def test_partial_supersede_of_terminal_ticket_repaired_on_boot(repo, tmp_path):
+    """Same torn-write repair, on the SUPERSEDED path. The old ticket keeps its
+    FAILED status here, so a repair keyed on status == DEPRECATED would miss it
+    and leave superseded_by pointing at a ticket that was never written."""
+    old = await seed(repo, status="FAILED")
+    new = make_ticket(supersedes=old.ticket_id, lineage_root_id=old.lineage_root_id)
+    link = make_event(old, "SUPERSEDED", to_status="FAILED",
+                      details={"supersededBy": new.ticket_id})
+    await repo.transact_supersede(old.ticket_id, 1, link, new, created_event(new))
+    assert (await repo.get_ticket(old.ticket_id)).superseded_by == new.ticket_id
+
+    log = tmp_path / "tickets.jsonl"
+    lines = log.read_bytes().splitlines(keepends=True)
+    log.write_bytes(b"".join(lines[:-1]))
+
+    reopened = JsonlTicketRepository(str(tmp_path))
+    repaired = await reopened.get_ticket(old.ticket_id)
+    assert repaired.superseded_by is None  # dangling link reverted
+    assert repaired.status == "FAILED"  # ...without disturbing the outcome
+    assert await reopened.get_ticket(new.ticket_id) is None
+
+
+async def test_superseded_event_does_not_touch_status_or_execution(repo):
+    """The fold's SUPERSEDED branch sets exactly one field."""
+    old = await seed(repo, status="CLOSED")
+    before = await repo.get_ticket(old.ticket_id)
+    link = make_event(old, "SUPERSEDED", to_status="CLOSED", details={"supersededBy": "T-NEW"})
+    after = await repo.append_event(old.ticket_id, before.seq, link)
+
+    assert after.superseded_by == "T-NEW"
+    assert after.status == "CLOSED"
+    assert after.execution == before.execution
+    assert after.model_dump(exclude={"superseded_by", "seq"}) == before.model_dump(
+        exclude={"superseded_by", "seq"}
+    )
+
+
 async def test_immutability_frozen_fields_survive_fold(repo, tmp_path):
     """No event payload can rewrite frozen fields — apply_event only touches
     MUTABLE_FIELDS, even if details smuggles ticket-shaped data."""

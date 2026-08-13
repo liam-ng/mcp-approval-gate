@@ -1,5 +1,5 @@
 import { format } from "date-fns"
-import { Archive, Bot, CircleCheck, CircleX, Clock, MessageSquare, Tag, UserRound, Cog } from "lucide-react"
+import { Archive, Bot, CircleCheck, CircleX, Clock, FilePen, MessageSquare, Tag, UserRound, Cog } from "lucide-react"
 import type { AuditEvent } from "@/lib/types"
 
 const ICON: Record<AuditEvent["type"], typeof Clock> = {
@@ -15,6 +15,7 @@ const ICON: Record<AuditEvent["type"], typeof Clock> = {
   TAGS_UPDATED: Tag,
   COMMENT_ADDED: MessageSquare,
   CLOSED: Archive,
+  SUPERSEDED: FilePen,
 }
 
 const LABEL: Record<AuditEvent["type"], string> = {
@@ -30,6 +31,9 @@ const LABEL: Record<AuditEvent["type"], string> = {
   TAGS_UPDATED: "Tags updated",
   COMMENT_ADDED: "Comment",
   CLOSED: "Closed",
+  // Distinct from DEPRECATED: this ticket kept its own outcome and gained a
+  // follow-up, rather than being replaced before it ran.
+  SUPERSEDED: "Followed up (superseded)",
 }
 
 function formatTags(tags: unknown): string {
@@ -41,7 +45,7 @@ function formatTags(tags: unknown): string {
 function eventDetail(e: AuditEvent): string | null {
   const d = e.details ?? {}
   if (e.type === "REJECTED" && typeof d.reason === "string") return `Reason: ${d.reason}`
-  if (e.type === "DEPRECATED" && typeof d.supersededBy === "string")
+  if ((e.type === "DEPRECATED" || e.type === "SUPERSEDED") && typeof d.supersededBy === "string")
     return `Superseded by ${d.supersededBy.slice(-8)}`
   if ((e.type === "EXECUTION_COMPLETED" || e.type === "EXECUTION_FAILED") && typeof d.message === "string")
     return d.message

@@ -56,6 +56,12 @@ AuditEventType = Literal[
     # Manual close (service.close_ticket) — distinct from EXECUTION_COMPLETED,
     # which also lands on status=CLOSED but only via a successful execution.
     "CLOSED",
+    # Superseding a ticket that already reached a terminal outcome (FAILED or
+    # CLOSED) — a follow-up, not a replacement. DEPRECATED is the pre-outcome
+    # case: the old ticket never ran, so overwriting its status loses nothing.
+    # Here it did run, so the status stays and only supersededBy is set;
+    # rewriting a FAILED ticket to DEPRECATED would assert it never took effect.
+    "SUPERSEDED",
 ]
 
 

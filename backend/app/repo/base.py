@@ -73,6 +73,11 @@ def apply_event(ticket: Ticket, event: AuditEvent) -> Ticket:
     elif event.type == "DEPRECATED":
         updates["status"] = "DEPRECATED"
         updates["superseded_by"] = details["supersededBy"]
+    elif event.type == "SUPERSEDED":
+        # Terminal-ticket supersede: link only. status is deliberately NOT set —
+        # the ticket already reached FAILED/CLOSED and that outcome is a fact,
+        # not something a later follow-up gets to rewrite.
+        updates["superseded_by"] = details["supersededBy"]
     elif event.type == "EXPIRED":
         updates["status"] = "EXPIRED"
     elif event.type == "CLOSED":
@@ -141,8 +146,15 @@ class TicketRepository(ABC):
         self,
         old_ticket_id: str,
         expected_seq: int,
-        deprecated_event: AuditEvent,
+        supersede_event: AuditEvent,
         new_ticket: Ticket,
         created_event: AuditEvent,
     ) -> None:
-        """Atomically deprecate the old ticket and create its successor."""
+        """Atomically link the old ticket to a new successor and create it.
+
+        `supersede_event` is either a DEPRECATED event (the old ticket never
+        ran, so it is replaced outright) or a SUPERSEDED one (it already
+        reached FAILED/CLOSED and keeps that status, gaining only the link).
+        Implementations must not assume which: apply whatever event is passed
+        and let the shared fold decide what changes.
+        """

@@ -15,15 +15,27 @@ from ulid import ULID
 
 from app.core.canonical_json import parameters_hash
 from app.core.models import (
+    TERMINAL_STATUSES,
     ActionDetails,
     Actor,
     Approval,
     AuditEvent,
     Ticket,
+    TicketStatus,
 )
 from app.core.schemas import ExecutionResultRequest, TicketCreateRequest
 from app.core.status_machine import assert_transition, status_after_approval
 from app.repo.base import TicketRepository
+
+# Statuses a supersede may start from. The first two are replacements (the old
+# ticket never ran); the last two are follow-ups to an outcome that stands.
+# REJECTED/EXPIRED/DEPRECATED are absent on purpose: re-proposing after a
+# rejection or a timeout should be a fresh ticket, not a chain that inherits
+# the lineage of a decision someone already made. EXECUTING is absent because
+# the outcome is not known yet — wait for it, then follow up.
+SUPERSEDABLE_STATUSES: frozenset[TicketStatus] = frozenset(
+    {"PENDING_APPROVAL", "APPROVED", "FAILED", "CLOSED"}
+)
 
 
 class ServiceError(Exception):
@@ -314,21 +326,38 @@ async def supersede_ticket(
         raise TicketNotFound(f"ticket {old_ticket_id} not found")
     if old.superseded_by:
         raise TicketSuperseded(f"ticket already superseded by {old.superseded_by}")
-    if old.status not in ("PENDING_APPROVAL", "APPROVED"):
+    if old.status not in SUPERSEDABLE_STATUSES:
         raise InvalidTicketState(f"cannot supersede a {old.status} ticket")
-    assert_transition(old.status, "DEPRECATED", "human")
+
+    # Two shapes, decided by whether the old ticket ever reached an outcome.
+    #
+    # PENDING_APPROVAL/APPROVED — it never ran, so it is genuinely replaced:
+    # a real DEPRECATED status transition, checked against the status machine.
+    #
+    # FAILED/CLOSED — a follow-up to something that already happened. The old
+    # status stays put (see the SUPERSEDED event in models.py) so a retry after
+    # a failed execution cannot erase the fact that EC2 was touched, and so the
+    # dashboard's per-status counts keep reflecting what actually ran. It is not
+    # a status transition at all, so it bypasses status_machine entirely — the
+    # same call TAGS_UPDATED makes, for the same reason.
+    is_follow_up = old.status in TERMINAL_STATUSES
+    if not is_follow_up:
+        assert_transition(old.status, "DEPRECATED", "human")
 
     # assignee carries over: the AI agent still executes; the human editor
     # becomes the proposer, so they cannot approve their own edit.
     new_ticket, created = build_ticket(
         payload, assignee=old.assignee, proposed_by=editor_email, supersedes=old
     )
-    deprecated = _event(
-        old, old.seq + 1, "DEPRECATED", Actor(kind="human", id=editor_email),
-        from_status=old.status, to_status="DEPRECATED",
+    link_event = _event(
+        old, old.seq + 1,
+        "SUPERSEDED" if is_follow_up else "DEPRECATED",
+        Actor(kind="human", id=editor_email),
+        from_status=old.status,
+        to_status=old.status if is_follow_up else "DEPRECATED",
         details={"supersededBy": new_ticket.ticket_id},
     )
-    await repo.transact_supersede(old.ticket_id, old.seq, deprecated, new_ticket, created)
+    await repo.transact_supersede(old.ticket_id, old.seq, link_event, new_ticket, created)
     return new_ticket
 
 

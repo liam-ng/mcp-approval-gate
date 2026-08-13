@@ -84,6 +84,7 @@ export interface AuditEvent {
     | "TAGS_UPDATED"
     | "COMMENT_ADDED"
     | "CLOSED"
+    | "SUPERSEDED"
   actor: { kind: "agent" | "human" | "system"; id: string }
   fromStatus?: TicketStatus | null
   toStatus?: TicketStatus | null

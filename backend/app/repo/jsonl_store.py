@@ -8,8 +8,10 @@ memory. Crash-safety properties:
 - A torn final line (crash mid-append) is detected as invalid JSON and
   skipped on replay; corruption anywhere else aborts startup loudly.
 - transact_supersede writes both lines in a single os.write so the pair is
-  torn together or not at all; a DEPRECATED whose successor's TICKET_CREATED
-  line is missing is repaired on replay by reverting the deprecation.
+  torn together or not at all; a superseded_by pointing at a successor whose
+  TICKET_CREATED line is missing is repaired on replay by reverting the link
+  event. Keyed on the dangling link rather than on status == DEPRECATED, since
+  a follow-up to a FAILED/CLOSED ticket leaves its status untouched.
 
 Requires a single replica (k8s strategy: Recreate) — writes are serialized by
 one in-process asyncio.Lock and fsync'd.
@@ -85,7 +87,11 @@ class JsonlTicketRepository(TicketRepository):
 
     def _repair_partial_supersede(self) -> None:
         for ticket in list(self._tickets.values()):
-            if ticket.status == "DEPRECATED" and ticket.superseded_by not in self._tickets:
+            # Keyed on superseded_by, NOT on status == "DEPRECATED": a follow-up
+            # to a FAILED/CLOSED ticket sets the link via a SUPERSEDED event and
+            # leaves the status alone, so a status check would sail straight past
+            # a torn write on exactly that path and leave a dangling link.
+            if ticket.superseded_by is not None and ticket.superseded_by not in self._tickets:
                 logger.warning(
                     "reverting partial supersede on %s (missing successor %s)",
                     ticket.ticket_id,
@@ -169,7 +175,7 @@ class JsonlTicketRepository(TicketRepository):
         self,
         old_ticket_id: str,
         expected_seq: int,
-        deprecated_event: AuditEvent,
+        supersede_event: AuditEvent,
         new_ticket: Ticket,
         created_event: AuditEvent,
     ) -> None:
@@ -183,9 +189,10 @@ class JsonlTicketRepository(TicketRepository):
                 )
             if new_ticket.ticket_id in self._tickets:
                 raise DuplicateError(f"ticket {new_ticket.ticket_id} already exists")
-            deprecated = apply_event(old, deprecated_event)
+            # DEPRECATED or SUPERSEDED — the fold decides what the event changes.
+            linked = apply_event(old, supersede_event)
             # Single write so the pair cannot be half-persisted (see module doc).
-            self._append_lines(_dump(deprecated_event) + _dump(created_event))
-            self._tickets[old_ticket_id] = deprecated
-            self._events[old_ticket_id].append(deprecated_event)
+            self._append_lines(_dump(supersede_event) + _dump(created_event))
+            self._tickets[old_ticket_id] = linked
+            self._events[old_ticket_id].append(supersede_event)
             self._apply_to_state(created_event)

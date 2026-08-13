@@ -122,6 +122,12 @@ Every 15–30 s with jitter, up to your own deadline. Response includes
   new ticket, and **treat it as a new instruction**: re-confirm with the
   operator before continuing to poll it (its parameters differ from what you
   proposed).
+- `FAILED` / `CLOSED` **with** `supersededBy` set → a human opened a follow-up
+  to a ticket that already ran (e.g. a fixed retry after a failure). Same rule
+  as `DEPRECATED`: follow the link, treat the successor as a new instruction.
+  Note the old ticket keeps its `FAILED`/`CLOSED` status — `supersededBy`, not
+  the status, is what tells you a follow-up exists. Stop polling the old one
+  either way; it is terminal.
 
 ### 3. Start — `POST /api/agent/tickets/{id}/execution/start`
 
@@ -147,7 +153,11 @@ construct. Capture the SDK response's `ResponseMetadata.RequestId`.
 ```
 
 `outcome: "failure"` marks the ticket FAILED; retrying requires a new
-(superseding) ticket — never re-execute a FAILED ticket.
+(superseding) ticket — never re-execute a FAILED ticket. A human creates that
+retry by superseding the failed ticket (portal, or the `supersede_change_ticket`
+MCP tool), which links the two and starts a fresh approval cycle. The failed
+ticket stays `FAILED`, so the record that AWS was already touched survives the
+retry.
 
 ## Strong enforcement (for the agent-role owner)
 

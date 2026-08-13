@@ -83,8 +83,13 @@ export function SupersedeDialog({ ticket }: { ticket: Ticket }) {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Request failed"),
   })
 
+  // Mirrors SUPERSEDABLE_STATUSES in backend/app/core/service.py. FAILED and
+  // CLOSED are follow-ups to something that already ran, so the wording below
+  // changes; REJECTED/EXPIRED stay out — those start a fresh chain, not an edit.
+  const isFollowUp = ticket.status === "FAILED" || ticket.status === "CLOSED"
   const canSupersede =
-    (ticket.status === "PENDING_APPROVAL" || ticket.status === "APPROVED") && !ticket.supersededBy
+    (ticket.status === "PENDING_APPROVAL" || ticket.status === "APPROVED" || isFollowUp) &&
+    !ticket.supersededBy
   if (!canSupersede) return null
 
   const errors = form.formState.errors
@@ -111,16 +116,29 @@ export function SupersedeDialog({ ticket }: { ticket: Ticket }) {
       <DialogTrigger asChild>
         <Button variant="outline">
           <FilePen />
-          Supersede
+          {isFollowUp ? "Follow up" : "Supersede"}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Supersede this ticket</DialogTitle>
+          <DialogTitle>
+            {isFollowUp ? "Create a follow-up ticket" : "Supersede this ticket"}
+          </DialogTitle>
           <DialogDescription>
-            Submitted tickets are immutable. Your edit becomes a new ticket requiring fresh
-            approval; this one is marked Deprecated. You become the proposer, so you cannot
-            approve the new ticket yourself.
+            {isFollowUp ? (
+              <>
+                This ticket already ran and stays {ticket.status === "FAILED" ? "Failed" : "Closed"}{" "}
+                — a follow-up cannot rewrite what happened. Your changes become a new ticket,
+                linked to this one and requiring fresh approval. You become the proposer, so you
+                cannot approve it yourself.
+              </>
+            ) : (
+              <>
+                Submitted tickets are immutable. Your edit becomes a new ticket requiring fresh
+                approval; this one is marked Deprecated. You become the proposer, so you cannot
+                approve the new ticket yourself.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <form
