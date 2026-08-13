@@ -91,23 +91,29 @@ jobs:
           [ "$missing" -eq 0 ] || { echo "::error::Configure the missing secrets in the liam-dev environment or at repo level, then re-run."; exit 1; }
 
   test:
-    name: Type check + build test
+    name: Import + settings check
     runs-on: ubuntu-latest
     defaults:
       run:
+        # Import check must run from executor/ so `app.*` resolves; settings.py
+        # validates at import, so this is the CrashLoop class CI can catch.
         working-directory: executor
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-python@v7
         with:
-          # Same channel as frontend/Dockerfile's node:lts-alpine build stage,
-          # so `npm run build` here and in the image run on one Node version.
-          node-version: "lts/*"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: | #./pipelines/frontend/ci.sh test
-          npm ci --no-audit --no-fund
-          npm run build
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: executor/requirements.txt
+      - run: | #./pipelines/executor/ci.sh test
+          python -m pip install --quiet -r requirements.txt
+          GATE_SERVER_ID=ci-import-check python -c "
+          import app.main, app.aws_exec, app.gate_client
+          from app.settings import settings
+          assert settings.dry_run is True, 'DRY_RUN must default to on'
+          assert settings.poll_interval_seconds > 0
+          print('executor imports clean; dry_run default is on')
+          "
 
   # Hard gate: SonarQube scan is required to pass before the image is built
   # Configure quality gate on SonarCloud to control pass/fail criteria
