@@ -259,12 +259,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # --name wants the ACR *resource* name, not the login server. az's own
-      # FQDN strip is wrong for hyphenated names (liammcp-xxxx.azurecr.io →
-      # "liammcp"), so strip at the first dot ourselves.
+      # Login server is {name}-{suffix}.azurecr.io. --suffix is required when
+      # the identity can push images but cannot read the ACR ARM resource
+      # (az would otherwise fall back to name.azurecr.io and fail).
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: az acr login --name "${REGISTRY%%.*}"
+        run: |
+          host="${REGISTRY%.azurecr.io}"
+          az acr login --name "${host%%-*}" --suffix "${host#*-}"
 
       # Re-runs the Build step's action with push instead of load. Every layer is a cache hit from that step
       - name: Push Image to ACR

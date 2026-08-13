@@ -39,7 +39,7 @@ scan_image() {
 }
 
 push_image() {
-  # Assumes the caller already authenticated (`az acr login --name <registry>`)
+  # Assumes the caller already authenticated (`az acr login` or equivalent)
   local component="$1" ref
   ref="$(image_ref "$component")"
   log "Pushing $ref"
