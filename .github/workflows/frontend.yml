@@ -171,9 +171,8 @@ jobs:
       # there is a different commit entirely.
       image_tag: ${{ steps.ref.outputs.image_tag }}
     env:
-      # The ACR login server. REGISTRY is the variable name pipelines/lib.sh
-      # reads, so ci.sh computes the same ref that was built here. The ACR
-      # login step strips .azurecr.io to pass the registry name to az acr login.
+      # Full ACR login server (e.g. myacr-xxxx.azurecr.io). Image refs use this
+      # as-is; the ACR login step strips to the resource name via ${REGISTRY%%.*}.
       REGISTRY: ${{ secrets.REGISTRY_ENDPOINT }}
     steps:
       - uses: actions/checkout@v7
@@ -275,9 +274,12 @@ jobs:
       #     # Container registry server url
       #     login-server: # default is https://index.docker.io/v1/
           
+      # --name wants the ACR *resource* name, not the login server. az's own
+      # FQDN strip is wrong for hyphenated names (liammcp-xxxx.azurecr.io →
+      # "liammcp"), so strip at the first dot ourselves.
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: az acr login --name "${REGISTRY}"
+        run: az acr login --name "${REGISTRY%%.*}"
 
       # Re-runs the Build step's action with push instead of load. Every layer is a cache hit from that step
       - name: Push Image to ACR

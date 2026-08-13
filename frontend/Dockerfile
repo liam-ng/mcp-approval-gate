@@ -3,7 +3,7 @@
 FROM node:lts-alpine AS build
 WORKDIR /build
 COPY package.json package-lock.json* ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . ./
 # `npm run build` is tsc --noEmit && vite build, so a type error fails the image build.
 RUN npm run build
