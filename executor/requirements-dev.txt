@@ -1,0 +1,3 @@
+# Test-only. The runtime image installs requirements.txt alone -- pytest never ships to the cluster.
+-r requirements.txt
+pytest>=8

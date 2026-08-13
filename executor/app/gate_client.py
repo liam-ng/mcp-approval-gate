@@ -2,6 +2,8 @@
 
 Every call carries a *freshly signed* X-Gate-Identity envelope: the gate
 replay-protects each one, so a cached header fails the second time it is used.
+
+Re-signing alone is NOT enough to make two envelopes differ -- see identity_header.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import secrets
 from typing import Any
 
 import botocore.session
@@ -36,7 +39,17 @@ class GateError(RuntimeError):
 
 
 def identity_header() -> str:
-    """Base64 envelope of a presigned sts:GetCallerIdentity request."""
+    """Base64 envelope of a presigned sts:GetCallerIdentity request.
+
+    X-GATE-NONCE IS LOAD-BEARING, NOT DECORATION. SigV4 is deterministic: same credentials, same
+    canonical request, same X-Amz-Date produces a byte-identical signature -- and X-Amz-Date has
+    only 1-second resolution. The gate's replay cache keys on sha256(Signature), so without the
+    nonce ANY TWO CALLS IN THE SAME CLOCK SECOND collide and the second is rejected 401
+    "replayed identity request". poll -> execution/start -> execution/result runs in ~8ms, so it
+    hit this on the first ticket that ever reached the executor (2026-08-13); before that the poll
+    always returned [] and only one call per 20s cycle was ever signed, which hid it completely.
+    Signed, not merely sent -- an unsigned header changes nothing about the signature.
+    """
     credentials = _session.get_credentials()
     if credentials is None:
         raise RuntimeError(
@@ -52,6 +65,9 @@ def identity_header() -> str:
             # Must be signed, not merely sent: the gate checks it appears in
             # SignedHeaders before it trusts the envelope.
             "X-Gate-Server-Id": settings.gate_server_id,
+            # STS ignores unknown headers but still validates the signature over them, so this is
+            # safe to add -- X-Gate-Server-Id above already proves the pattern round-trips.
+            "X-Gate-Nonce": secrets.token_hex(16),
         },
     )
     SigV4Auth(credentials, "sts", settings.sts_region).add_auth(request)

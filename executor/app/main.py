@@ -28,6 +28,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("executor")
 
+# Retries for execution/result ONLY. Between execution/start and a landed result the ticket sits in
+# EXECUTING, and nothing recovers that state: jobs/expiry.py sweeps PENDING_APPROVAL and APPROVED only.
+# So this call is worth retrying where the others are not.
+_REPORT_ATTEMPTS = 4
+_REPORT_BACKOFF_SECONDS = 2
+
 _stop = False
 
 
@@ -35,6 +41,43 @@ def _handle_signal(signum: int, _frame: FrameType | None) -> None:
     global _stop
     log.info("received signal %s, finishing current ticket then exiting", signum)
     _stop = True
+
+
+def _report(
+    gate: GateClient, ticket_id: str, outcome: str, message: str, request_ids: list[str]
+) -> None:
+    """Land the outcome, retrying. MUST NOT RAISE.
+
+    An exception here escaped process_ticket and killed the whole process on 2026-08-13, leaving the
+    ticket EXECUTING forever -- exactly the state the caller comments warn about. The 401 that did it
+    was transient (a same-second signature collision, fixed in gate_client.identity_header), so a
+    retry would have recovered it outright.
+    """
+    for attempt in range(1, _REPORT_ATTEMPTS + 1):
+        try:
+            gate.report_result(ticket_id, outcome, message, request_ids)
+            return
+        except GateError as exc:
+            # The gate already moved it (a concurrent replica, or a human). Retrying cannot win.
+            if exc.code == "INVALID_STATE":
+                log.error("%s: execution/result rejected: %s -- not retrying", ticket_id, exc)
+                return
+            log.warning(
+                "%s: execution/result attempt %d/%d failed: %s",
+                ticket_id, attempt, _REPORT_ATTEMPTS, exc,
+            )
+        except Exception:  # noqa: BLE001 - a raise here strands the ticket permanently
+            log.exception(
+                "%s: execution/result attempt %d/%d failed", ticket_id, attempt, _REPORT_ATTEMPTS
+            )
+        if attempt < _REPORT_ATTEMPTS and not _stop:
+            time.sleep(_REPORT_BACKOFF_SECONDS * attempt)
+
+    # Loud on purpose: this is the one failure a human has to clean up by hand.
+    log.error(
+        "%s: STUCK IN EXECUTING, NEEDS MANUAL CLEANUP -- outcome %r never recorded after %d attempts",
+        ticket_id, outcome, _REPORT_ATTEMPTS,
+    )
 
 
 def process_ticket(gate: GateClient, ticket: dict[str, Any]) -> None:
@@ -76,14 +119,14 @@ def process_ticket(gate: GateClient, ticket: dict[str, Any]) -> None:
         log.error("%s: execution failed: %s", ticket_id, exc)
         # Report before raising anything else: a ticket stuck in EXECUTING is
         # invisible to the expiry sweep and needs manual cleanup.
-        gate.report_result(ticket_id, "failure", str(exc), [])
+        _report(gate, ticket_id, "failure", str(exc), [])
         return
     except Exception as exc:  # noqa: BLE001 - must not leave the ticket EXECUTING
         log.exception("%s: unexpected error during execution", ticket_id)
-        gate.report_result(ticket_id, "failure", f"unexpected error: {exc}", [])
+        _report(gate, ticket_id, "failure", f"unexpected error: {exc}", [])
         return
 
-    gate.report_result(ticket_id, "success", "executed as approved", request_ids)
+    _report(gate, ticket_id, "success", "executed as approved", request_ids)
     log.info("%s: done, awsRequestIds=%s", ticket_id, request_ids)
 
 
@@ -115,7 +158,12 @@ def main() -> int:
             for ticket in approved:
                 if _stop:
                     break
-                process_ticket(gate, ticket)
+                # Last line of defence. One bad ticket must not take the loop down with it -- the
+                # kubelet would restart us into the same ticket and the same crash, forever.
+                try:
+                    process_ticket(gate, ticket)
+                except Exception:  # noqa: BLE001
+                    log.exception("%s: unhandled error, skipping", ticket.get("ticketId"))
 
             delay = settings.poll_interval_seconds + random.uniform(
                 0, settings.poll_jitter_seconds

@@ -114,6 +114,12 @@ jobs:
           assert settings.poll_interval_seconds > 0
           print('executor imports clean; dry_run default is on')
           "
+      # The import check above cannot catch a wrong VALUE, only a broken import. Both 2026-08-13
+      # executor faults were values -- a signature that repeated within one second, and a report
+      # that raised instead of retrying -- so these are unit tests, not another smoke check.
+      - run: |
+          python -m pip install --quiet -r requirements-dev.txt
+          python -m pytest tests -q
 
   # Hard gate: SonarQube scan is required to pass before the image is built
   # Configure quality gate on SonarCloud to control pass/fail criteria
