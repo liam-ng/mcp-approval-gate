@@ -99,12 +99,17 @@ Rules:
   required member is refused with **422 `INVALID_ACTION_PARAMETERS`** and a
   message naming the problem — fix and re-send; nothing was created, and no
   approver was disturbed.
-  **This is a floor, not a guarantee.** The model cannot express AWS's
-  conditional requirements, so a call can pass here and still fail at AWS:
-  `RunInstances` marks only `MinCount`/`MaxCount` required, yet also needs
-  `ImageId` unless you pass a `LaunchTemplate`. Send what the call genuinely
-  needs to identify what it acts on, and ask the operator for values like AMI
-  or subnet ids rather than inventing them.
+  A second, hand-curated layer then checks the conditional requirements the
+  model *cannot* express — "X is required unless Y". `RunInstances` marks only
+  `MinCount`/`MaxCount` required, yet also needs `ImageId` unless you pass a
+  `LaunchTemplate`; that is refused here too, with the same 422. Query both
+  lists up front with `describe_operation_parameters`, whose `conditional` key
+  returns them as `{oneOf, because}` entries.
+  **Still a floor, not a guarantee.** Only the rules that are certain are
+  encoded, because wrongly rejecting a legitimate change is worse than letting
+  AWS report it. Send what the call genuinely needs to identify what it acts
+  on, and ask the operator for values like AMI or subnet ids rather than
+  inventing them.
 - `resourceArns` must list every targeted resource; empty only for
   pure-creation operations (e.g. `RunInstances`).
 - The gate sets `assignee` and `proposedBy` to your **verified role** ARN and
@@ -116,9 +121,12 @@ Rules:
   what keeps your tickets yours across one. Never compare `assignee` against your
   own raw `GetCallerIdentity` ARN — it will not match.
 - The gate also adds two tags to every ticket, overwriting any you send under
-  the same keys: `gateTicketId` (= this ticket's own id — see step 4) and
-  `owner` (= `proposedBy`). Don't try to set either yourself; they're not
-  caller-controlled.
+  the same keys: `gateTicketId` (= this ticket's own id) and `owner`
+  (= `proposedBy`). Don't try to set either yourself; they're not
+  caller-controlled. For resource-creating operations the gate additionally
+  merges those tags into `parameters.TagSpecifications` — so the `parameters`
+  on the ticket you get back will not be byte-identical to the ones you sent.
+  That is expected, and it is the version the hash covers. See step 4.
 - Surface the ticket URL (`{PUBLIC_BASE_URL}/tickets/{ticketId}`) to the human
   operator in the conversation.
 
@@ -151,11 +159,23 @@ Body: `{"parametersHash": "<hash from create>"}`.
 
 ### 4. Execute
 
-One AWS call, exactly the approved parameters. Where the operation supports
-tagging (e.g. `RunInstances` `TagSpecifications`), propagate the ticket's
-`tags` verbatim onto created resources — `gateTicketId` is already in there
-(the gate sets it at creation, see step 1), so there's no separate tag to
-construct. Capture the SDK response's `ResponseMetadata.RequestId`.
+One AWS call, **exactly** the approved parameters — send `actionDetails.parameters`
+from the `execution/start` response verbatim, adding nothing. Capture the SDK
+response's `ResponseMetadata.RequestId`.
+
+That includes `TagSpecifications`, which the gate now writes into `parameters`
+itself at creation for resource-creating operations (`RunInstances`,
+`CreateSecurityGroup`, `CreateVolume`, `CreateSnapshot`, `CreateKeyPair`,
+`ImportKeyPair`). Earlier revisions of this document asked the executor to
+propagate the ticket's `tags` onto created resources; that is no longer your
+job, and doing it yourself now would send parameters that differ from the ones
+whose hash was approved. The tags are already in what you were handed.
+
+Why the gate does it: `gateTicketId` is the ticket's own id, so nothing can
+supply it before the ticket exists — and the IAM policy and SCP both *deny*
+resource creation when `aws:RequestTag/gateTicketId` is absent. Injecting at
+creation rather than at execution means `parametersHash` covers the tags and
+the approver saw them.
 
 ### 5. Report — `POST /api/agent/tickets/{id}/execution/result`
 

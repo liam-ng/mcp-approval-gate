@@ -49,8 +49,18 @@ def create_app(mcp_app: Starlette | None = None) -> FastAPI:
     from app.api import auth as human_auth
     from app.api.tickets import router as tickets_router
 
+    from app.api.aws_meta import router as aws_meta_router
+
     human_auth.install(app, settings)
     app.include_router(tickets_router)
+    # Credential-free EC2 parameter metadata for the portal's create form.
+    app.include_router(aws_meta_router)
+    # Account lookups behind the same form's pickers. Mounted unconditionally —
+    # the routes answer "not enabled" themselves rather than 404ing, so the SPA
+    # gets the same shape either way and needs no build-time knowledge of it.
+    from app.api.aws_discovery import router as aws_discovery_router
+
+    app.include_router(aws_discovery_router)
 
     # Email-link path (signed token, no session) — see auth/approval_links.py.
     from app.api.approval_link_actions import router as approval_link_router

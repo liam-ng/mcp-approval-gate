@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Trust policy for the portal's read-only discovery role (paired with",
+    "portal-discovery-inline-policy.json). Bound to the BACKEND's service",
+    "account, not the executor's — that separation is the whole point: the",
+    "executor role is the only identity permitted to mutate EC2, and the gate",
+    "process must never be able to assume it. Two roles, two service accounts,",
+    "no overlap.",
+    "",
+    "Replace ACCOUNT_ID and OIDC_PROVIDER, and confirm the service account name",
+    "matches the backend Deployment's in the manifest repo (liam-ng/",
+    "liam-dev-k8s-argoCD, apps/mcp-approval-gate/base) — the sub is exact-match,",
+    "so a rename there silently breaks credential resolution here.",
+    "",
+    "IRSA only works where an EKS OIDC provider exists. On the liam-dev WSL",
+    "cluster there is none (docs/plan.md, 2026-08-07), so the backend takes",
+    "mounted credentials from ESO instead and AWS_DISCOVERY_ROLE_ARN names the",
+    "role to assume; that path needs an additional statement here trusting the",
+    "source principal, exactly as the executor role already does."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/OIDC_PROVIDER"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "OIDC_PROVIDER:aud": "sts.amazonaws.com",
+          "OIDC_PROVIDER:sub": "system:serviceaccount:mcp-approval-gate:mcp-approval-gate-backend"
+        }
+      }
+    }
+  ]
+}

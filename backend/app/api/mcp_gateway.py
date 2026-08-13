@@ -33,7 +33,8 @@ from starlette.applications import Starlette
 from app.api.deps import get_repo
 from app.auth.mcp_token_verifier import OidcTokenVerifier
 from app.core import service
-from app.core.aws_schema import UnknownOperation, describe_operation
+from app.core.aws_conditional import describe_operation_full
+from app.core.aws_schema import UnknownOperation
 from app.core.canonical_json import parameters_hash
 from app.core.schemas import ActionDetailsIn, TicketCreateRequest
 from app.settings import Settings
@@ -135,16 +136,24 @@ def build_mcp_app(settings: Settings) -> Starlette:
         and `accepted` (every valid name mapped to its type).
 
         IMPORTANT — `required` is necessary but not always sufficient. AWS has
-        conditional requirements the model cannot express: RunInstances lists
-        only MinCount/MaxCount, yet it also needs ImageId unless you supply a
-        LaunchTemplate. Treat `required` as a floor, not a checklist, and think
-        about what the specific call actually needs to identify what it acts on.
+        conditional requirements botocore's model cannot express, so they come
+        back separately in `conditional`: a list of `{oneOf, because}` entries,
+        each meaning "at least one of these names must be supplied". For
+        RunInstances that is `ImageId` or `LaunchTemplate`. The gate enforces
+        both lists at creation, so a ticket missing either is rejected before
+        any human sees it. Treat `required` + `conditional` as a floor, not a
+        complete checklist, and think about what the specific call needs to
+        identify what it acts on.
+
+        `gateTags` lists the resource types the gate will tag with the ticket
+        id on your behalf — it injects TagSpecifications itself, so do not
+        construct them for those types.
 
         Returns no example values by design. Never invent an ImageId, SubnetId
         or similar — ask the operator which one they mean.
         """
         try:
-            return describe_operation("ec2", operation)
+            return describe_operation_full("ec2", operation)
         except UnknownOperation as exc:
             raise ValueError(str(exc)) from exc
 

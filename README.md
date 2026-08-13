@@ -38,7 +38,8 @@ Single container: FastAPI serves `/api/*` and the built React SPA.
 frontend/   React 19 + Vite + shadcn/ui + TanStack Query/Table (portal brand tokens)
 backend/    FastAPI + Pydantic v2; core domain, repo layer, auth, SES notifier, /mcp gateway
 executor/   Headless poller that performs approved tickets
-deploy/iam/ IRSA trust policy + inline policy for the executor role
+deploy/iam/ IRSA trust policy + inline policy for the executor role, and a
+            separate Describe-only role for the portal form's resource pickers
 deploy/scp/ AWS Organizations SCP restricting mutating EC2 actions to the gate's executor role
 ```
 

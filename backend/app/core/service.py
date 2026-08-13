@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from ulid import ULID
 
+from app.core.aws_conditional import validate_conditional, with_gate_tags
 from app.core.aws_schema import InvalidParameters, UnknownOperation, validate_parameters
 from app.core.canonical_json import parameters_hash
 from app.core.models import (
@@ -89,6 +90,14 @@ class InvalidActionParameters(ServiceError):
     code = "INVALID_ACTION_PARAMETERS"
 
 
+class ExecutorNotConfigured(ServiceError):
+    """No executor identity is configured, so a ticket created here could be
+    approved and then never run. Refusing up front beats stranding it."""
+
+    http_status = 503
+    code = "EXECUTOR_NOT_CONFIGURED"
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -127,6 +136,14 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
             payload.action_details.operation,
             payload.action_details.parameters,
         )
+        # Second layer: the conditional requirements botocore's flat `required`
+        # list cannot express. Runs on the caller's own parameters, before any
+        # gate-side injection, so the error only ever names keys they sent.
+        validate_conditional(
+            payload.action_details.service,
+            payload.action_details.operation,
+            payload.action_details.parameters,
+        )
     except (UnknownOperation, InvalidParameters) as exc:
         # Deliberately NOT `except ValueError`: an unexpected failure inside
         # botocore would then be reported as "your parameters are wrong" and
@@ -134,23 +151,31 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
         raise InvalidActionParameters(str(exc)) from exc
 
     ticket_id = str(ULID())
+    # gateTicketId/owner are default tags the gate itself sets on every ticket,
+    # always overwritten last so a caller can't spoof who the requester was or
+    # which ticket a resource traces back to. Computed before ActionDetails
+    # because created resources must carry them on the wire and the hash has to
+    # cover them.
+    tags = {**payload.tags, "gateTicketId": ticket_id, "owner": proposed_by}
+    # The IAM policy and the SCP both deny resource creation when
+    # aws:RequestTag/gateTicketId is absent, and no caller can supply it: the
+    # id does not exist until the line above. Injecting here rather than in the
+    # executor keeps the executed call identical to the approved one.
+    parameters = with_gate_tags(
+        payload.action_details.service,
+        payload.action_details.operation,
+        payload.action_details.parameters,
+        tags,
+    )
     details = ActionDetails(
         service=payload.action_details.service,
         operation=payload.action_details.operation,
         region=payload.action_details.region,
-        parameters=payload.action_details.parameters,
-        parameters_hash=parameters_hash(payload.action_details.parameters),
+        parameters=parameters,
+        parameters_hash=parameters_hash(parameters),
         resource_arns=payload.action_details.resource_arns,
         reason=payload.action_details.reason,
     )
-    # gateTicketId/owner are default tags the gate itself sets on every
-    # ticket, always overwritten last so a caller can't spoof who the
-    # requester was or which ticket a resource traces back to. gateTicketId
-    # doubles as the tag IAM enforcement keys on (aws:RequestTag/gateTicketId,
-    # deploy/scp/deny-ec2-mutations-except-gate.json) — setting it here means
-    # an agent that just propagates `tags` verbatim (docs/agent-contract.md
-    # step 4) gets it for free, no separate manual tag to remember.
-    tags = {**payload.tags, "gateTicketId": ticket_id, "owner": proposed_by}
     ticket = Ticket(
         ticket_id=ticket_id,
         subject=payload.subject,
@@ -200,20 +225,24 @@ async def create_agent_ticket(
     return ticket, True
 
 
-async def create_mcp_ticket(
+async def create_human_ticket(
     repo: TicketRepository, payload: TicketCreateRequest, proposer_email: str,
     executor_arn: str, idempotency_key: str | None,
 ) -> tuple[Ticket, bool]:
-    """Ticket creation from the /mcp route (see api/mcp_gateway.py).
+    """Ticket creation by a human — from the /mcp route or the portal form.
 
     The proposer is a human, identified by the OAuth bearer token the IDE
-    presented — never an AI agent. The assignee is the fixed, trusted
-    executor identity (MCP_EXECUTOR_ARN) that polls and executes via the
-    existing SigV4 agent contract; the human's own credentials never touch
-    AWS. Because proposed_by != assignee, approve_ticket's
-    proposer-cannot-approve-own-ticket rule still applies normally, and
-    because proposed_by is the human (not the executor), that same human
-    cannot approve their own MCP-created ticket either.
+    presented (api/mcp_gateway.py) or by the session cookie (api/tickets.py) —
+    never an AI agent. The assignee is the fixed, trusted executor identity
+    (MCP_EXECUTOR_ARN) that polls and executes via the existing SigV4 agent
+    contract; the human's own credentials never touch AWS. Because
+    proposed_by != assignee, approve_ticket's proposer-cannot-approve-own-ticket
+    rule still applies normally, and because proposed_by is the human (not the
+    executor), that same human cannot approve their own ticket either.
+
+    Both human paths share this function deliberately: they differ only in how
+    the person authenticated, and giving the portal its own copy would be two
+    places to keep the assignee/idempotency semantics right in.
     """
     if idempotency_key:
         existing = await repo.find_by_idempotency_key(executor_arn, idempotency_key)
@@ -224,6 +253,11 @@ async def create_mcp_ticket(
     )
     await repo.create_ticket(ticket, created)
     return ticket, True
+
+
+# The name the MCP gateway has always called. Kept so the /mcp path reads as
+# what it is at its call site.
+create_mcp_ticket = create_human_ticket
 
 
 async def get_agent_ticket(repo: TicketRepository, ticket_id: str, principal_arn: str) -> Ticket:

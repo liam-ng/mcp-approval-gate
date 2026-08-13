@@ -90,6 +90,18 @@ class Settings(BaseSettings):
     # ALLOWED_AGENT_ARNS. Never the human's own credentials.
     mcp_executor_arn: str | None = None
 
+    # --- Read-only AWS discovery for the portal's create form (app/aws/) ---
+    # OFF BY DEFAULT, and that default is the safe one: with this unset the gate
+    # holds no AWS credentials at all, which is the posture CLAUDE.md's "the
+    # gate needs no AWS permissions" invariant describes. Turning it on trades
+    # that for real subnet/AMI/security-group pickers instead of typed-in ids.
+    # The identity here must be a SEPARATE, Describe-only role — never the
+    # executor's, whose whole point is that only the executor holds it.
+    aws_discovery_enabled: bool = False
+    aws_discovery_role_arn: str | None = None   # unset = use the ambient chain (IRSA)
+    aws_discovery_default_region: str = "ca-central-1"
+    aws_discovery_cache_seconds: int = 300
+
     @field_validator("required_approvals")
     @classmethod
     def _approvals_range(cls, v: int) -> int:
@@ -116,6 +128,17 @@ class Settings(BaseSettings):
                 "MCP_ENABLED requires an OIDC issuer (OIDC_ISSUER or MCP_OAUTH_ISSUER) and MCP_EXECUTOR_ARN"
             )
         return self
+
+    @property
+    def executor_arn(self) -> str | None:
+        """The identity that executes human-proposed tickets.
+
+        One setting, two consumers: the /mcp gateway and the portal's create
+        form. Named after MCP only for historical reasons — a second env var
+        holding the same ARN would be a second thing to get wrong, and a
+        mismatch between them fails at execution time, long after the mistake.
+        """
+        return self.mcp_executor_arn
 
     @property
     def approver_group_list(self) -> list[str]:

@@ -91,6 +91,17 @@ def describe_operation(service: str, operation: str) -> dict[str, Any]:
     }
 
 
+def operation_members(service: str, operation: str) -> frozenset[str]:
+    """Every parameter name the operation accepts. Empty for no-parameter ops.
+
+    Exists so callers can ask "does this operation take TagSpecifications?"
+    without reaching into botocore's shape objects themselves — the one place
+    that knowledge lives should stay this module.
+    """
+    shape = _resolve(service, operation).input_shape
+    return frozenset(shape.members) if shape is not None else frozenset()
+
+
 def validate_parameters(service: str, operation: str, parameters: dict[str, Any]) -> None:
     """Raise InvalidParameters/UnknownOperation with an agent-readable message.
 

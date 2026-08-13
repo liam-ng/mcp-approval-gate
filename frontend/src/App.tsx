@@ -7,6 +7,7 @@ import ApproveByLink from "@/routes/approve-by-link"
 import Dashboard from "@/routes/dashboard"
 import Login from "@/routes/login"
 import TicketDetail from "@/routes/ticket-detail"
+import TicketNew from "@/routes/ticket-new"
 import Tickets from "@/routes/tickets"
 
 const queryClient = new QueryClient({
@@ -39,6 +40,8 @@ export default function App() {
           <Route element={<Shell />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/tickets" element={<Tickets />} />
+            {/* Before /tickets/:id — otherwise "new" matches as a ticket id. */}
+            <Route path="/tickets/new" element={<TicketNew />} />
             <Route path="/tickets/:id" element={<TicketDetail />} />
           </Route>
         </Routes>

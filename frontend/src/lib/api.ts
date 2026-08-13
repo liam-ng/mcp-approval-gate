@@ -1,4 +1,14 @@
-import type { ApprovalLinkPreview, Me, Ticket, TicketDetail, TicketList, TicketStatus } from "./types"
+import type {
+  ApprovalLinkPreview,
+  DiscoveryKind,
+  DiscoveryResult,
+  Me,
+  OperationSchema,
+  Ticket,
+  TicketDetail,
+  TicketList,
+  TicketStatus,
+} from "./types"
 
 export class ApiError extends Error {
   constructor(
@@ -89,6 +99,29 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason: reason || null }),
     }),
+
+  createTicket: (payload: unknown) =>
+    request<Ticket>("/api/tickets", { method: "POST", body: JSON.stringify(payload) }),
+
+  // Credential-free EC2 metadata that drives the create form's fields.
+  listOperations: () => request<{ operations: string[] }>("/api/aws/ec2/operations"),
+
+  getOperationSchema: (operation: string) =>
+    request<OperationSchema>(`/api/aws/ec2/operations/${encodeURIComponent(operation)}`),
+
+  // Account lookups behind the create form's pickers. Always 200 — check
+  // `enabled` and `error` rather than catching, so a gate with no AWS
+  // credentials (the default) simply offers text inputs instead.
+  discover: (kind: DiscoveryKind, region: string) =>
+    request<DiscoveryResult>(
+      `/api/aws/ec2/discover/${kind}?region=${encodeURIComponent(region)}`,
+    ),
+
+  resolveAmiAlias: (alias: string, region: string) =>
+    request<DiscoveryResult>(
+      `/api/aws/ec2/discover/ami-alias/resolve?alias=${encodeURIComponent(alias)}` +
+        `&region=${encodeURIComponent(region)}`,
+    ),
 
   // Signed email-link approve/reject — no session, token stands in for one.
   previewByLink: (token: string) =>

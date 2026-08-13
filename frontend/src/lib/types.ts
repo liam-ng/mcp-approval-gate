@@ -102,6 +102,48 @@ export interface TicketList {
   cursor?: string | null
 }
 
+// Parameter shape of one EC2 operation, from GET /api/aws/ec2/operations/{op}.
+// Derived from botocore's models on the server (backend/app/core/aws_schema.py)
+// plus the hand-curated conditional layer (aws_conditional.py) — never
+// re-declared here, because a second copy of AWS's parameter rules in
+// TypeScript would drift from the one the gate actually enforces.
+export interface OperationSchema {
+  operation: string
+  /** Names AWS's own model marks mandatory. */
+  required: string[]
+  /** Every accepted name -> its botocore type ("string", "integer", "list", ...). */
+  accepted: Record<string, string>
+  /** "At least one of these" rules the model cannot express. */
+  conditional: { oneOf: string[]; because: string }[]
+  /** Resource types the gate tags itself — the form must not ask for these. */
+  gateTags: string[]
+}
+
+// Account lookups from /api/aws/ec2/discover/*. Read-only, and optional: the
+// gate holds no AWS credentials unless AWS_DISCOVERY_ENABLED is set, so
+// `enabled: false` is a normal answer and means "let them type the id".
+export type DiscoveryKind =
+  | "vpcs"
+  | "subnets"
+  | "security-groups"
+  | "key-pairs"
+  | "instances"
+  | "volumes"
+  | "images"
+
+export interface DiscoveryItem {
+  id: string
+  label: string
+  detail?: string
+  vpcId?: string | null
+}
+
+export interface DiscoveryResult {
+  items: DiscoveryItem[]
+  enabled: boolean
+  error?: string | null
+}
+
 export interface Me {
   email: string
   name?: string | null

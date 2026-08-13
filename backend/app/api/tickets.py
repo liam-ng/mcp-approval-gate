@@ -14,7 +14,9 @@ from fastapi import APIRouter, Depends, Query
 from app.api.auth import SessionUser, require_approver, require_session
 from app.api.deps import get_repo
 from app.core import service
+from app.core.canonical_json import parameters_hash
 from app.core.models import Ticket, TicketStatus
+from app.notifications.ses import notify_ticket_created
 from app.core.schemas import (
     CloseTicketRequest,
     CommentCreateRequest,
@@ -56,6 +58,39 @@ async def list_tickets(
         key, value = tag.split("=", 1)
         items = [t for t in items if t.tags.get(key) == value]
     return TicketListResponse(items=items, cursor=page.cursor)
+
+
+@router.post("", response_model=Ticket, response_model_by_alias=True, status_code=201)
+async def create_ticket(payload: TicketCreateRequest, user: User, repo: Repo):
+    """Open a ticket from the portal form.
+
+    Identical in trust shape to the /mcp path — a human proposes, the trusted
+    executor identity is the assignee — so it goes through the same service
+    function. It is NOT gated on MCP_ENABLED: that flag governs whether IDEs
+    may reach the gateway, which has nothing to do with whether a signed-in
+    human may open a ticket in the portal they are already looking at. What it
+    does need is the executor ARN, without which the ticket would be approved
+    and then never picked up.
+    """
+    settings = get_settings()
+    if not settings.executor_arn:
+        raise service.ExecutorNotConfigured(
+            "no executor identity is configured (MCP_EXECUTOR_ARN), so a ticket "
+            "created here could never be executed"
+        )
+    # Same shape as the MCP path's key, for the same reason: a double-submitted
+    # form (or a retried request) maps to the one ticket instead of opening a
+    # duplicate that a human then has to close.
+    idempotency_key = (
+        f"portal:{user.email}:{payload.action_details.operation}:"
+        f"{parameters_hash(payload.action_details.parameters)}"
+    )
+    ticket, created = await service.create_human_ticket(
+        repo, payload, user.email, settings.executor_arn, idempotency_key
+    )
+    if created:
+        notify_ticket_created(ticket)
+    return ticket
 
 
 @router.get("/{ticket_id}", response_model=TicketDetailResponse, response_model_by_alias=True)

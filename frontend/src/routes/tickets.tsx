@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { Plus } from "lucide-react"
 import { useNavigate } from "react-router"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DataTable } from "@/components/tickets/ticket-table"
@@ -34,7 +36,13 @@ export default function Tickets() {
 
   return (
     <div className="space-y-6">
-      <h1 className="section-title">Change Requests</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="section-title">Change Requests</h1>
+        <Button onClick={() => navigate("/tickets/new")}>
+          <Plus />
+          New request
+        </Button>
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
           <TabsList>
