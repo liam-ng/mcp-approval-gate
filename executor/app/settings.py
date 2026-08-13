@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Region for the STS endpoint used to *sign* the identity envelope. This is
     # unrelated to the region an EC2 call runs in -- that comes from the
     # ticket's actionDetails.
-    sts_region: str = "us-east-1"
+    sts_region: str = "ca-central-1"
 
     poll_interval_seconds: float = Field(default=20.0, gt=0)
     # Jitter avoids a thundering herd if this is ever scaled past one replica
