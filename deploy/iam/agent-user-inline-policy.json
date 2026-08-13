@@ -21,6 +21,12 @@
       }
     },
     {
+      "Sid": "ResolveSsmPublicAmiAliases",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": "arn:aws:ssm:ca-central-1::parameter/aws/service/*"
+    },
+    {
       "Sid": "RunInstancesReferencedResources",
       "Effect": "Allow",
       "Action": "ec2:RunInstances",

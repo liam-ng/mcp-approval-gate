@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../liam-dev-k8s-argoCD"
+		}
+	],
+	"settings": {}
+}
