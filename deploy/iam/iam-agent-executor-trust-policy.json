@@ -1,0 +1,13 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "AllowLocalWslExecutorUser",
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::035614256871:user/iam-user-mcp-liam-dev-executor"
+        },
+        "Action": "sts:AssumeRole"
+      }
+    ]
+  }

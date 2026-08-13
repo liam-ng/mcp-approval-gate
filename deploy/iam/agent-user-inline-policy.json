@@ -1,83 +1,82 @@
 {
-  "_comment": [
-    "Inline policy for the IAM User(s) whose ARN you add to ALLOWED_AGENT_ARNS",
-    "(and, if it's also the trusted executor, MCP_EXECUTOR_ARN) in the gate's",
-    "config. This is the permission side of that trust: ALLOWED_AGENT_ARNS only",
-    "controls who the gate will ACCEPT a presigned identity from — it grants no",
-    "AWS permissions itself. This policy is what actually lets that identity",
-    "call AWS. See docs/agent-contract.md for the SigV4 handshake and",
-    "docs/mcp-gateway.md / deploy/scp/ for the account-wide backstop that",
-    "denies these same actions to every OTHER principal.",
-    "",
-    "Prefer an IAM Role (IRSA on the cluster ServiceAccount, matching how the",
-    "rest of deploy/k8s/ is set up) over a long-lived IAM User wherever",
-    "possible — this file is provided as an inline User policy only because",
-    "that's what was asked for; attach it the same way to a Role instead if you",
-    "can (aws iam put-role-policy).",
-    "",
-    "Replace ACCOUNT_ID before attaching:",
-    "  aws iam put-user-policy --user-name mcp-agent-user \\",
-    "    --policy-name mcp-approval-gate-agent \\",
-    "    --policy-document file://agent-user-inline-policy.json",
-    "",
-    "Action list intentionally mirrors deploy/scp/deny-ec2-mutations-except-",
-    "gate.json's allowlist (the v1 EC2 scope) so the two stay in sync — an",
-    "action added to one without the other either can't be called (missing",
-    "here) or is silently un-gated at the account level (missing there).",
-    "",
-    "AllowGatedResourceCreation requires aws:RequestTag/gateTicketId — but only",
-    "on the subset of actions that actually accept a TagSpecifications",
-    "parameter. Do NOT add that condition to AllowGatedExistingResourceActions:",
-    "those calls (StopInstances, TerminateInstances, Authorize/RevokeSecurity-",
-    "GroupIngress/Egress, ...) carry no request-tag parameter at all, so a",
-    "requires-the-tag condition on them would deny this identity too, not just",
-    "unapproved callers. See docs/agent-contract.md's 'Strong enforcement'",
-    "section for the full explanation.",
-    "",
-    "The two mutating statements are scoped to arn:aws:ec2:ca-central-1:ACCOUNT_ID:* — this",
-    "account, any region, any EC2 resource type/id (the trailing bare '*'",
-    "covers instance/*, security-group/*, volume/*, snapshot/*, key-pair/*,",
-    "elastic-ip/*, etc. all at once, which RunInstances in particular needs",
-    "since it touches several resource types in one call). Note the region",
-    "field is a wildcard '*', not empty (':::' would match a literal empty",
-    "region, which no EC2 resource has, and would silently make the statement",
-    "match nothing). sts:GetCallerIdentity and ec2:Describe* are left at",
-    "Resource: \"*\" deliberately — neither supports resource-level permissions,",
-    "so any other value would just break them, not narrow them."
-  ],
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "AllowCallerIdentityForGateHandshake",
-      "Effect": "Allow",
-      "Action": "sts:GetCallerIdentity",
-      "Resource": "*"
-    },
-    {
-      "Sid": "AllowReadOnlyEc2Describe",
+      "Sid": "ReadOnlyDescribe",
       "Effect": "Allow",
       "Action": "ec2:Describe*",
       "Resource": "*"
     },
     {
-      "Sid": "AllowGatedResourceCreation",
+      "Sid": "RunInstancesCreatedResourcesMustBeTagged",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:ca-central-1:035614256871:instance/*",
+        "arn:aws:ec2:ca-central-1:035614256871:volume/*",
+        "arn:aws:ec2:ca-central-1:035614256871:network-interface/*"
+      ],
+      "Condition": {
+        "Null": { "aws:RequestTag/gateTicketId": "false" }
+      }
+    },
+    {
+      "Sid": "RunInstancesReferencedResources",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:ca-central-1::image/*",
+        "arn:aws:ec2:ca-central-1::snapshot/*",
+        "arn:aws:ec2:ca-central-1:035614256871:subnet/*",
+        "arn:aws:ec2:ca-central-1:035614256871:security-group/*",
+        "arn:aws:ec2:ca-central-1:035614256871:key-pair/*"
+      ]
+    },
+    {
+      "Sid": "CreateResourcesMustBeTagged",
       "Effect": "Allow",
       "Action": [
-        "ec2:RunInstances",
+        "ec2:CreateKeyPair",
         "ec2:CreateSecurityGroup",
         "ec2:CreateVolume",
-        "ec2:CreateSnapshot",
-        "ec2:CreateKeyPair"
+        "ec2:CreateSnapshot"
       ],
-      "Resource": "arn:aws:ec2:ca-central-1:ACCOUNT_ID:*",
+      "Resource": [
+        "arn:aws:ec2:ca-central-1:035614256871:key-pair/*",
+        "arn:aws:ec2:ca-central-1:035614256871:security-group/*",
+        "arn:aws:ec2:ca-central-1:035614256871:volume/*",
+        "arn:aws:ec2:ca-central-1:035614256871:snapshot/*"
+      ],
       "Condition": {
-        "Null": {
-          "aws:RequestTag/gateTicketId": "false"
+        "Null": { "aws:RequestTag/gateTicketId": "false" }
+      }
+    },
+    {
+      "Sid": "CreateSecurityGroupReferencedVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:ca-central-1:035614256871:vpc/*"
+    },
+    {
+      "Sid": "TagOnCreateOnly",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:ca-central-1:035614256871:*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": [
+            "RunInstances",
+            "CreateSecurityGroup",
+            "CreateVolume",
+            "CreateSnapshot",
+            "CreateKeyPair",
+            "ImportKeyPair"
+          ]
         }
       }
     },
     {
-      "Sid": "AllowGatedExistingResourceActions",
+      "Sid": "MutateExistingResources",
       "Effect": "Allow",
       "Action": [
         "ec2:StartInstances",
@@ -86,25 +85,23 @@
         "ec2:TerminateInstances",
         "ec2:ModifyInstanceAttribute",
         "ec2:ModifyInstanceMetadataOptions",
-        "ec2:CreateTags",
-        "ec2:DeleteTags",
+        "ec2:AttachVolume",
+        "ec2:DetachVolume",
+        "ec2:DeleteVolume",
+        "ec2:DeleteSnapshot",
         "ec2:DeleteSecurityGroup",
         "ec2:AuthorizeSecurityGroupIngress",
         "ec2:AuthorizeSecurityGroupEgress",
         "ec2:RevokeSecurityGroupIngress",
         "ec2:RevokeSecurityGroupEgress",
-        "ec2:AttachVolume",
-        "ec2:DetachVolume",
-        "ec2:DeleteVolume",
-        "ec2:DeleteSnapshot",
-        "ec2:AssociateAddress",
-        "ec2:DisassociateAddress",
         "ec2:AllocateAddress",
         "ec2:ReleaseAddress",
-        "ec2:DeleteKeyPair",
-        "ec2:ImportKeyPair"
+        "ec2:AssociateAddress",
+        "ec2:DisassociateAddress",
+        "ec2:ImportKeyPair",
+        "ec2:DeleteKeyPair"
       ],
-      "Resource": "arn:aws:ec2:ca-central-1:ACCOUNT_ID:*"
+      "Resource": "arn:aws:ec2:ca-central-1:035614256871:*"
     }
   ]
 }

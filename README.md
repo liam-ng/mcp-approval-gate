@@ -4,6 +4,14 @@ A **blocking approval gate** that adds auditability, traceability, and human
 control to changes an AI agent (AWS MCP server). Before any mutating action, the agent must create a change-request ticket, wait for
 human approval through mail or web portal, execute exactly the approved parameters, and report the result.
 
+## README
+
+| Component | Purpose |
+|-----------|---------|
+| [frontend](frontend/README.md) | Human review/approve portal. Does not create tickets. |
+| [backend](backend/README.md) | Gate API + ticket store: approve before mutate, immutable audit log. |
+| [executor](executor/README.md) | After approval, run exact ticket params on AWS and report the result. |
+
 ## Features
 
 - **Audit Trail** — every change is an appended audit event (local or append-only S3 bucket or dynamoDB).
