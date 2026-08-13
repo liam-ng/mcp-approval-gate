@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from ulid import ULID
 
+from app.core.aws_schema import InvalidParameters, UnknownOperation, validate_parameters
 from app.core.canonical_json import parameters_hash
 from app.core.models import (
     TERMINAL_STATUSES,
@@ -80,6 +81,14 @@ class TicketSuperseded(ServiceError):
     code = "TICKET_SUPERSEDED"
 
 
+class InvalidActionParameters(ServiceError):
+    """The proposed AWS call is structurally invalid — rejected at creation so
+    no approver is asked to sign off on something AWS will refuse."""
+
+    http_status = 422
+    code = "INVALID_ACTION_PARAMETERS"
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -109,6 +118,21 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
     They differ only for an agent: proposed_by is the stable role ARN that assignee matching needs,
     actor_arn the full STS session ARN that the audit trail would otherwise lose.
     """
+    # Structural check against botocore's model BEFORE anything is persisted,
+    # so all three creation paths (agent, MCP, supersede) get it from one place.
+    # Only catches what the model can express — see aws_schema's KNOWN LIMIT.
+    try:
+        validate_parameters(
+            payload.action_details.service,
+            payload.action_details.operation,
+            payload.action_details.parameters,
+        )
+    except (UnknownOperation, InvalidParameters) as exc:
+        # Deliberately NOT `except ValueError`: an unexpected failure inside
+        # botocore would then be reported as "your parameters are wrong" and
+        # send the caller chasing a bug that isn't theirs. Let it 500 instead.
+        raise InvalidActionParameters(str(exc)) from exc
+
     ticket_id = str(ULID())
     details = ActionDetails(
         service=payload.action_details.service,

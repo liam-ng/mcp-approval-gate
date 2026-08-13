@@ -94,6 +94,17 @@ of 201).
 
 Rules:
 - `parameters` must be the **exact** SDK parameters you intend to send.
+- The gate validates them against botocore's service model before the ticket
+  exists. A bad operation name, an unknown parameter, a wrong type or a missing
+  required member is refused with **422 `INVALID_ACTION_PARAMETERS`** and a
+  message naming the problem — fix and re-send; nothing was created, and no
+  approver was disturbed.
+  **This is a floor, not a guarantee.** The model cannot express AWS's
+  conditional requirements, so a call can pass here and still fail at AWS:
+  `RunInstances` marks only `MinCount`/`MaxCount` required, yet also needs
+  `ImageId` unless you pass a `LaunchTemplate`. Send what the call genuinely
+  needs to identify what it acts on, and ask the operator for values like AMI
+  or subnet ids rather than inventing them.
 - `resourceArns` must list every targeted resource; empty only for
   pure-creation operations (e.g. `RunInstances`).
 - The gate sets `assignee` and `proposedBy` to your **verified role** ARN and

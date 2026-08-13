@@ -129,6 +129,33 @@ def test_create_ticket_success(client, respx_mock):
 
 
 @respx.mock
+def test_create_rejects_structurally_invalid_parameters(client, respx_mock):
+    """A call AWS would refuse never becomes a ticket, so no approver is asked
+    to sign off on it. The message names what was wrong so the agent can retry."""
+    mock_sts(respx_mock)
+    payload = create_payload()
+    payload["actionDetails"]["parameters"] = {"InstanceIds": "i-0abc"}  # string, want list
+    r = client.post(
+        "/api/agent/tickets", json=payload, headers={"X-Gate-Identity": identity_header()}
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "INVALID_ACTION_PARAMETERS"
+    assert "InstanceIds" in r.json()["error"]["message"]
+
+
+@respx.mock
+def test_create_rejects_unknown_operation(client, respx_mock):
+    mock_sts(respx_mock)
+    payload = create_payload()
+    payload["actionDetails"]["operation"] = "StopInstance"  # singular
+    r = client.post(
+        "/api/agent/tickets", json=payload, headers={"X-Gate-Identity": identity_header()}
+    )
+    assert r.status_code == 422, r.text
+    assert "StopInstance" in r.json()["error"]["message"]
+
+
+@respx.mock
 def test_idempotent_create_returns_existing(client, respx_mock):
     mock_sts(respx_mock)
     h1 = {"X-Gate-Identity": identity_header(), "Idempotency-Key": "conv-1"}

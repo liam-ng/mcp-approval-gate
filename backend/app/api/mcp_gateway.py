@@ -33,6 +33,7 @@ from starlette.applications import Starlette
 from app.api.deps import get_repo
 from app.auth.mcp_token_verifier import OidcTokenVerifier
 from app.core import service
+from app.core.aws_schema import UnknownOperation, describe_operation
 from app.core.canonical_json import parameters_hash
 from app.core.schemas import ActionDetailsIn, TicketCreateRequest
 from app.settings import Settings
@@ -47,6 +48,13 @@ def build_mcp_app(settings: Settings) -> Starlette:
             "executes anything itself: it opens a ticket that a human approver (never "
             "you) must approve in the web portal before the trusted executor runs it. "
             "Always surface ticketUrl to the user. Use check_ticket_status to follow up. "
+            "`parameters` must be the exact boto3/SDK parameter dict for the operation — "
+            "if you are not certain of the names, types or required set, call "
+            "describe_operation_parameters FIRST rather than guessing. A ticket whose "
+            "parameters AWS rejects wastes a human's approval. Include whatever identifies "
+            "what the call acts on (e.g. RunInstances needs an ImageId unless you pass a "
+            "LaunchTemplate, even though the model does not list it as required) — and ask "
+            "the operator for such values, never invent them. "
             "If a ticket needs different parameters, or a failed one needs retrying with "
             "a fix, use supersede_change_ticket rather than opening a duplicate — it links "
             "the new ticket to the old one and requires fresh approval. Use close_ticket to withdraw a ticket "
@@ -115,6 +123,30 @@ def build_mcp_app(settings: Settings) -> Starlette:
             "ticketUrl": f"{settings.public_base_url.rstrip('/')}/tickets/{ticket.ticket_id}",
             "created": created,
         }
+
+    @server.tool(structured_output=True)
+    async def describe_operation_parameters(operation: str) -> dict[str, Any]:
+        """List the parameters an EC2 operation takes, before proposing it.
+
+        Call this when you are not certain of the exact parameter names, types
+        or required set for `operation` — it is cheaper than having a ticket
+        rejected, and far cheaper than having a human approve a call that AWS
+        then refuses. Returns `required` (names AWS's model marks mandatory)
+        and `accepted` (every valid name mapped to its type).
+
+        IMPORTANT — `required` is necessary but not always sufficient. AWS has
+        conditional requirements the model cannot express: RunInstances lists
+        only MinCount/MaxCount, yet it also needs ImageId unless you supply a
+        LaunchTemplate. Treat `required` as a floor, not a checklist, and think
+        about what the specific call actually needs to identify what it acts on.
+
+        Returns no example values by design. Never invent an ImageId, SubnetId
+        or similar — ask the operator which one they mean.
+        """
+        try:
+            return describe_operation("ec2", operation)
+        except UnknownOperation as exc:
+            raise ValueError(str(exc)) from exc
 
     @server.tool(structured_output=True)
     async def check_ticket_status(ticket_id: str) -> dict[str, Any]:

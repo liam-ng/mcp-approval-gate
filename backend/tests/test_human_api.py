@@ -206,6 +206,27 @@ def test_supersede_links_and_deprecates(make_client):
     assert r.json()["error"]["code"] == "TICKET_SUPERSEDED"
 
 
+def test_supersede_with_invalid_parameters_is_refused_before_creating(make_client):
+    """The structural check runs on every creation path, supersede included —
+    so a bad edit can't slip past by riding an already-valid ticket."""
+    client = make_client()
+    old_id = seed_agent_ticket(client)
+    login(client, "editor@example.com")
+
+    bad = create_payload()
+    bad["actionDetails"]["parameters"] = {"InstanceId": "i-0abc"}  # singular; not a real param
+    r = client.post(f"/api/tickets/{old_id}/supersede", json=bad)
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "INVALID_ACTION_PARAMETERS"
+    assert "InstanceId" in r.json()["error"]["message"]
+
+    # The original is untouched — no half-done supersede.
+    detail = client.get(f"/api/tickets/{old_id}").json()
+    assert detail["ticket"]["status"] == "PENDING_APPROVAL"
+    assert detail["ticket"]["supersededBy"] is None
+    assert len(detail["lineage"]) == 1
+
+
 @pytest.mark.parametrize(
     "outcome,expected_status", [("failure", "FAILED"), ("success", "CLOSED")]
 )
