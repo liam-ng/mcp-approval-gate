@@ -43,6 +43,20 @@ class AgentIdentity:
     role_arn: str | None  # normalized arn:aws:iam::acct:role/Name, if derivable
     account: str
 
+    @property
+    def principal_arn(self) -> str:
+        """The identity a ticket's `assignee` is matched against. ALWAYS use this, never caller_arn.
+
+        caller_arn carries a per-process session suffix (`.../botocore-session-1786598848`) that no
+        stored assignee can ever equal: MCP_EXECUTOR_ARN is configured in role form, and a ticket the
+        agent created itself stops matching the moment the pod restarts and botocore mints a new
+        session name. Matching on caller_arn silently returned an empty poll list for every
+        MCP-proposed ticket until they expired at the 72h TTL (observed 2026-08-08 and 2026-08-13).
+        role_arn is None only for principals with no role form (e.g. the account root), where the
+        caller_arn is itself already stable.
+        """
+        return self.role_arn or self.caller_arn
+
 
 def _unauthorized(reason: str) -> HTTPException:
     return HTTPException(status_code=401, detail={"code": "AGENT_AUTH_FAILED", "message": reason})

@@ -19,6 +19,9 @@ from app.repo.jsonl_store import JsonlTicketRepository
 
 GATE_ID = "approval-gate-test"
 ROLE_ARN = "arn:aws:sts::123456789012:assumed-role/mcp-agent/pod-1"
+# What ROLE_ARN normalizes to, and what every assignee/proposed_by is stored as. The session suffix
+# (`/pod-1`) is deliberately dropped: it changes on each pod start. See AgentIdentity.principal_arn.
+EXECUTOR_ROLE_ARN = "arn:aws:iam::123456789012:role/mcp-agent"
 STS_JSON = {
     "GetCallerIdentityResponse": {
         "GetCallerIdentityResult": {
@@ -44,7 +47,9 @@ def client(tmp_path, monkeypatch):
     repo = JsonlTicketRepository(str(tmp_path))
     test_app.dependency_overrides[get_repo] = lambda: repo
 
-    yield TestClient(test_app)
+    test_client = TestClient(test_app)
+    test_client.repo = repo  # type: ignore[attr-defined]  # seam tests seed via the service layer
+    yield test_client
     settings_module._settings = None
 
 
@@ -109,15 +114,17 @@ def test_create_ticket_success(client, respx_mock):
     )
     assert r.status_code == 201, r.text
     ticket = r.json()
-    assert ticket["assignee"] == ROLE_ARN
-    assert ticket["proposedBy"] == ROLE_ARN
+    # ROLE form, not the ROLE_ARN session form the caller authenticated with -- a stored session ARN
+    # stops matching the moment the pod restarts.
+    assert ticket["assignee"] == EXECUTOR_ROLE_ARN
+    assert ticket["proposedBy"] == EXECUTOR_ROLE_ARN
     assert ticket["status"] == "PENDING_APPROVAL"
     assert len(ticket["actionDetails"]["parametersHash"]) == 64
     assert ticket["lineageRootId"] == ticket["ticketId"]
     # gateTicketId/owner are gate-assigned default tags on every ticket, not
     # just ones the caller happened to set (see create_payload's "team" tag).
     assert ticket["tags"]["gateTicketId"] == ticket["ticketId"]
-    assert ticket["tags"]["owner"] == ROLE_ARN
+    assert ticket["tags"]["owner"] == EXECUTOR_ROLE_ARN
     assert ticket["tags"]["team"] == "gti"
 
 
@@ -302,6 +309,146 @@ def test_list_my_tickets_filters_by_assignee_and_status(client, respx_mock):
         "/api/agent/tickets", params={"status": "APPROVED"}, headers={"X-Gate-Identity": identity_header()}
     )
     assert r.json() == []
+
+
+# --- assignee identity: STS session form vs role form ------------------------
+# Regression for the 2026-08-13 stall. caller_arn ends in a per-process session name
+# (`.../botocore-session-1786598848`); a stored assignee never does, so matching on it silently
+# returned [] and every MCP-proposed ticket sat APPROVED until the 72h TTL expired it.
+# Both halves passed in isolation -- test_mcp_gateway asserts the role-form assignee is written,
+# test_list_my_tickets_filters_by_assignee_and_status polls with two session-form agents.
+# ONLY THE SEAM BETWEEN THEM FAILED, so these tests cross it: seed the way /mcp does, poll as the agent.
+#
+# Call identity_header() once PER REQUEST, never reuse the dict -- it mints a random signature each
+# call and the replay cache 401s the second use of one.
+
+
+def sts_json_for(arn: str) -> dict:
+    return {
+        "GetCallerIdentityResponse": {
+            "GetCallerIdentityResult": {"Arn": arn, "Account": "123456789012", "UserId": "AROAX:s"}
+        }
+    }
+
+
+def seed_mcp_ticket(client, **payload_overrides):
+    """Create + approve a ticket exactly as api/mcp_gateway.py does: a human proposes, and the
+    assignee is MCP_EXECUTOR_ARN in ROLE form -- the shape that never matched a session ARN."""
+    import anyio
+
+    from app.core import service
+    from app.core.schemas import TicketCreateRequest
+
+    payload = TicketCreateRequest.model_validate(create_payload(**payload_overrides))
+
+    async def _seed():
+        ticket, _ = await service.create_mcp_ticket(
+            client.repo, payload, "alice@example.com", EXECUTOR_ROLE_ARN, None
+        )
+        return await service.approve_ticket(client.repo, ticket.ticket_id, "bob@example.com", 1)
+
+    return anyio.run(_seed)
+
+
+@respx.mock
+def test_mcp_proposed_ticket_is_visible_to_the_agent_poll(client, respx_mock):
+    """THE BUG: this returned [] because assignee was role form and caller_arn session form."""
+    approved = seed_mcp_ticket(client)
+    assert approved.status == "APPROVED"
+    assert approved.assignee == EXECUTOR_ROLE_ARN != ROLE_ARN  # the two forms really do differ
+
+    mock_sts(respx_mock)  # agent authenticates as the session-form ROLE_ARN
+    r = client.get(
+        "/api/agent/tickets",
+        params={"status": "APPROVED"},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    assert r.status_code == 200
+    assert [t["ticketId"] for t in r.json()] == [approved.ticket_id]
+
+
+@respx.mock
+def test_mcp_proposed_ticket_executes_end_to_end(client, respx_mock):
+    """The rest of the contract past the poll: start echoes the hash, result closes the ticket."""
+    approved = seed_mcp_ticket(client)
+    mock_sts(respx_mock)
+
+    r = client.post(
+        f"/api/agent/tickets/{approved.ticket_id}/execution/start",
+        json={"parametersHash": approved.action_details.parameters_hash},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    assert r.status_code == 200, r.json()
+    assert r.json()["status"] == "EXECUTING"
+
+    r = client.post(
+        f"/api/agent/tickets/{approved.ticket_id}/execution/result",
+        json={"outcome": "success", "message": "launched", "awsRequestIds": ["req-1"]},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    assert r.status_code == 200, r.json()
+    assert r.json()["status"] == "CLOSED"
+
+
+@respx.mock
+def test_agent_ticket_survives_a_session_name_change(client, respx_mock):
+    """A pod restart mints a new botocore session name. The ticket the agent opened before it must
+    stay executable -- storing the session ARN as assignee stranded it until the TTL expired."""
+    mock_sts(respx_mock)
+    created = client.post(
+        "/api/agent/tickets", json=create_payload(), headers={"X-Gate-Identity": identity_header()}
+    ).json()
+    assert created["assignee"] == EXECUTOR_ROLE_ARN  # role form, not the pod-1 session it was made from
+
+    # Same role, new session -- what the next pod presents.
+    respx_mock.post("https://sts.amazonaws.com/").mock(
+        return_value=Response(200, json=sts_json_for("arn:aws:sts::123456789012:assumed-role/mcp-agent/pod-2"))
+    )
+    r = client.get(
+        f"/api/agent/tickets/{created['ticketId']}", headers={"X-Gate-Identity": identity_header()}
+    )
+    assert r.status_code == 200
+    assert r.json()["ticketId"] == created["ticketId"]
+
+
+@respx.mock
+def test_a_different_role_still_cannot_see_the_ticket(client, respx_mock):
+    """Normalizing to the role form must not widen access ACROSS roles -- only across sessions."""
+    approved = seed_mcp_ticket(client)
+    respx_mock.post("https://sts.amazonaws.com/").mock(
+        return_value=Response(200, json=sts_json_for("arn:aws:sts::123456789012:assumed-role/mcp-other/x"))
+    )
+    listed = client.get(
+        "/api/agent/tickets",
+        params={"status": "APPROVED"},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    assert listed.json() == []
+    r = client.get(
+        f"/api/agent/tickets/{approved.ticket_id}",
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "NOT_ASSIGNEE"
+
+
+@respx.mock
+def test_audit_trail_keeps_the_full_session_arn(client, respx_mock):
+    """assignee is normalized for matching; the AUDIT must still say which session acted."""
+    import anyio
+
+    approved = seed_mcp_ticket(client)
+    mock_sts(respx_mock)
+    client.post(
+        f"/api/agent/tickets/{approved.ticket_id}/execution/start",
+        json={"parametersHash": approved.action_details.parameters_hash},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+
+    events = anyio.run(client.repo.list_audit_events, approved.ticket_id)
+    started = [e for e in events if e.type == "EXECUTION_STARTED"]
+    assert len(started) == 1
+    assert started[0].actor.id == ROLE_ARN  # the session ARN, not the normalized role ARN
 
 
 async def test_full_agent_flow_with_hash_mismatch(tmp_path):

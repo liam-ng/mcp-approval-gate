@@ -96,9 +96,14 @@ Rules:
 - `parameters` must be the **exact** SDK parameters you intend to send.
 - `resourceArns` must list every targeted resource; empty only for
   pure-creation operations (e.g. `RunInstances`).
-- The gate sets `assignee` and `proposedBy` to your **verified** ARN and
+- The gate sets `assignee` and `proposedBy` to your **verified role** ARN and
   computes `parametersHash` (sha256 of canonical JSON) — store both the
   returned `ticketId` and `parametersHash`.
+- That is the `arn:aws:iam::<acct>:role/<Name>` form, **not** the
+  `arn:aws:sts::<acct>:assumed-role/<Name>/<session>` form STS returns to you.
+  The session suffix changes every time your process restarts, so normalizing is
+  what keeps your tickets yours across one. Never compare `assignee` against your
+  own raw `GetCallerIdentity` ARN — it will not match.
 - The gate also adds two tags to every ticket, overwriting any you send under
   the same keys: `gateTicketId` (= this ticket's own id — see step 4) and
   `owner` (= `proposedBy`). Don't try to set either yourself; they're not
@@ -181,7 +186,8 @@ also open one conversationally through the gate's `/mcp` endpoint
 (`docs/mcp-gateway.md`) — those tickets share this role's `assignee`, but
 the agent process was never told the id. Poll the list endpoint (same
 `X-Gate-Identity` auth, results filtered server-side to tickets whose
-`assignee` is your own verified ARN):
+`assignee` is your own verified **role** ARN — an MCP-proposed ticket carries
+the gate's configured `MCP_EXECUTOR_ARN`, which is always in role form):
 
 ```
 GET /api/agent/tickets?status=APPROVED

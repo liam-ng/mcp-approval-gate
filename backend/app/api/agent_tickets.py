@@ -39,7 +39,7 @@ async def create_ticket(
     idempotency_key: str | None = Header(default=None),
 ):
     ticket, created = await service.create_agent_ticket(
-        repo, payload, agent.caller_arn, idempotency_key
+        repo, payload, agent.principal_arn, idempotency_key, actor_arn=agent.caller_arn
     )
     if not created:
         response.status_code = 200  # replayed create returns the existing ticket
@@ -55,7 +55,10 @@ async def list_my_tickets(agent: Agent, repo: Repo, status: TicketStatus | None 
     polls this (typically `?status=APPROVED`) instead of tracking ticket ids
     it never received."""
     page = await repo.query_by_status(status, limit=limit) if status else await repo.query_all(limit=limit)
-    mine = [t for t in page.items if t.assignee == agent.caller_arn]
+    # principal_arn, NOT caller_arn -- an MCP-proposed ticket carries MCP_EXECUTOR_ARN in role form,
+    # which the session-suffixed caller_arn can never equal. That mismatch made this endpoint, whose
+    # whole purpose is the /mcp case above, return [] for every such ticket until it expired.
+    mine = [t for t in page.items if t.assignee == agent.principal_arn]
     return [
         AgentPollResponse(
             ticket_id=t.ticket_id,
@@ -71,7 +74,7 @@ async def list_my_tickets(agent: Agent, repo: Repo, status: TicketStatus | None 
 
 @router.get("/{ticket_id}", response_model=AgentPollResponse, response_model_by_alias=True)
 async def poll_ticket(ticket_id: str, agent: Agent, repo: Repo):
-    ticket = await service.get_agent_ticket(repo, ticket_id, agent.caller_arn)
+    ticket = await service.get_agent_ticket(repo, ticket_id, agent.principal_arn)
     return AgentPollResponse(
         ticket_id=ticket.ticket_id,
         status=ticket.status,
@@ -91,7 +94,7 @@ async def start_execution(
     ticket_id: str, payload: ExecutionStartRequest, agent: Agent, repo: Repo
 ):
     ticket = await service.start_execution(
-        repo, ticket_id, agent.caller_arn, payload.parameters_hash
+        repo, ticket_id, agent.principal_arn, payload.parameters_hash, actor_arn=agent.caller_arn
     )
     return ExecutionStartResponse(
         ticket_id=ticket.ticket_id, status=ticket.status, action_details=ticket.action_details
@@ -102,4 +105,6 @@ async def start_execution(
 async def report_result(
     ticket_id: str, payload: ExecutionResultRequest, agent: Agent, repo: Repo
 ):
-    return await service.report_execution_result(repo, ticket_id, agent.caller_arn, payload)
+    return await service.report_execution_result(
+        repo, ticket_id, agent.principal_arn, payload, actor_arn=agent.caller_arn
+    )

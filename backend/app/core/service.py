@@ -89,8 +89,14 @@ def _event(ticket_or_id, seq: int, type_: str, actor: Actor, *, from_status=None
 
 def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: str,
                  idempotency_key: str | None = None,
-                 supersedes: Ticket | None = None) -> tuple[Ticket, AuditEvent]:
-    """Materialize a new PENDING_APPROVAL ticket + its TICKET_CREATED event."""
+                 supersedes: Ticket | None = None,
+                 actor_arn: str | None = None) -> tuple[Ticket, AuditEvent]:
+    """Materialize a new PENDING_APPROVAL ticket + its TICKET_CREATED event.
+
+    actor_arn records WHICH SESSION acted, where proposed_by records WHO is accountable.
+    They differ only for an agent: proposed_by is the stable role ARN that assignee matching needs,
+    actor_arn the full STS session ARN that the audit trail would otherwise lose.
+    """
     ticket_id = str(ULID())
     details = ActionDetails(
         service=payload.action_details.service,
@@ -127,7 +133,7 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
     )
     actor_kind = "agent" if proposed_by == assignee else "human"
     created = _event(
-        ticket, 1, "TICKET_CREATED", Actor(kind=actor_kind, id=proposed_by),
+        ticket, 1, "TICKET_CREATED", Actor(kind=actor_kind, id=actor_arn or proposed_by),
         to_status="PENDING_APPROVAL",
         details={"ticket": ticket.model_dump(mode="json", by_alias=True)},
     )
@@ -138,16 +144,21 @@ def build_ticket(payload: TicketCreateRequest, *, assignee: str, proposed_by: st
 
 
 async def create_agent_ticket(
-    repo: TicketRepository, payload: TicketCreateRequest, caller_arn: str,
-    idempotency_key: str | None,
+    repo: TicketRepository, payload: TicketCreateRequest, principal_arn: str,
+    idempotency_key: str | None, *, actor_arn: str | None = None,
 ) -> tuple[Ticket, bool]:
-    """Returns (ticket, created). Idempotent per (caller_arn, key)."""
+    """Returns (ticket, created). Idempotent per (principal_arn, key).
+
+    principal_arn MUST be AgentIdentity.principal_arn, never caller_arn -- storing a session ARN as
+    the assignee strands the ticket at the next pod restart, when the session name changes.
+    """
     if idempotency_key:
-        existing = await repo.find_by_idempotency_key(caller_arn, idempotency_key)
+        existing = await repo.find_by_idempotency_key(principal_arn, idempotency_key)
         if existing:
             return existing, False
     ticket, created = build_ticket(
-        payload, assignee=caller_arn, proposed_by=caller_arn, idempotency_key=idempotency_key
+        payload, assignee=principal_arn, proposed_by=principal_arn,
+        idempotency_key=idempotency_key, actor_arn=actor_arn,
     )
     await repo.create_ticket(ticket, created)
     return ticket, True
@@ -179,19 +190,21 @@ async def create_mcp_ticket(
     return ticket, True
 
 
-async def get_agent_ticket(repo: TicketRepository, ticket_id: str, caller_arn: str) -> Ticket:
+async def get_agent_ticket(repo: TicketRepository, ticket_id: str, principal_arn: str) -> Ticket:
+    # Compare against the ROLE form. See AgentIdentity.principal_arn for why caller_arn never matches.
     ticket = await repo.get_ticket(ticket_id)
     if ticket is None:
         raise TicketNotFound(f"ticket {ticket_id} not found")
-    if ticket.assignee != caller_arn:
+    if ticket.assignee != principal_arn:
         raise NotTicketAssignee("caller is not the ticket assignee")
     return ticket
 
 
 async def start_execution(
-    repo: TicketRepository, ticket_id: str, caller_arn: str, echoed_hash: str
+    repo: TicketRepository, ticket_id: str, principal_arn: str, echoed_hash: str,
+    *, actor_arn: str | None = None,
 ) -> Ticket:
-    ticket = await get_agent_ticket(repo, ticket_id, caller_arn)
+    ticket = await get_agent_ticket(repo, ticket_id, principal_arn)
     if ticket.status != "APPROVED":
         raise InvalidTicketState(f"ticket is {ticket.status}, not APPROVED")
     if echoed_hash != ticket.action_details.parameters_hash:
@@ -200,16 +213,18 @@ async def start_execution(
         )
     assert_transition(ticket.status, "EXECUTING", "agent")
     event = _event(
-        ticket, ticket.seq + 1, "EXECUTION_STARTED", Actor(kind="agent", id=caller_arn),
+        ticket, ticket.seq + 1, "EXECUTION_STARTED",
+        Actor(kind="agent", id=actor_arn or principal_arn),
         from_status=ticket.status, to_status="EXECUTING",
     )
     return await repo.append_event(ticket.ticket_id, ticket.seq, event)
 
 
 async def report_execution_result(
-    repo: TicketRepository, ticket_id: str, caller_arn: str, result: ExecutionResultRequest
+    repo: TicketRepository, ticket_id: str, principal_arn: str, result: ExecutionResultRequest,
+    *, actor_arn: str | None = None,
 ) -> Ticket:
-    ticket = await get_agent_ticket(repo, ticket_id, caller_arn)
+    ticket = await get_agent_ticket(repo, ticket_id, principal_arn)
     if ticket.status != "EXECUTING":
         raise InvalidTicketState(f"ticket is {ticket.status}, not EXECUTING")
     to_status = "CLOSED" if result.outcome == "success" else "FAILED"
@@ -217,7 +232,7 @@ async def report_execution_result(
     event = _event(
         ticket, ticket.seq + 1,
         "EXECUTION_COMPLETED" if result.outcome == "success" else "EXECUTION_FAILED",
-        Actor(kind="agent", id=caller_arn),
+        Actor(kind="agent", id=actor_arn or principal_arn),
         from_status=ticket.status, to_status=to_status,
         details={
             "outcome": result.outcome,
