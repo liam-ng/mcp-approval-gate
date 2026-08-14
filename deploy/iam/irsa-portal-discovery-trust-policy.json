@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Trust policy for the portal's read-only discovery role (paired with",
-    "portal-discovery-inline-policy.json). Bound to the BACKEND's service",
+    "iam-policy-portal-discovery.json). Bound to the BACKEND's service",
     "account, not the executor's — that separation is the whole point: the",
     "executor role is the only identity permitted to mutate EC2, and the gate",
     "process must never be able to assume it. Two roles, two service accounts,",

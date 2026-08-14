@@ -171,7 +171,7 @@ def validate_conditional(service: str, operation: str, parameters: dict[str, Any
 
 
 # The operations the portal form offers in its picker. Mirrors the action list
-# in deploy/iam/role-agent-ec2-mutation-policy.json, because an operation the
+# in deploy/iam/iam-policy-agent-ec2-mutation.json, because an operation the
 # executor's role cannot perform is one a human should not be led into
 # proposing.
 #
@@ -231,7 +231,7 @@ def describe_operation_full(service: str, operation: str) -> dict[str, Any]:
 
 # Operation -> the resource types its created resources are tagged under.
 #
-# MIRRORS deploy/iam/role-agent-ec2-mutation-policy.json EXACTLY, and must keep doing
+# MIRRORS deploy/iam/iam-policy-agent-ec2-mutation.json EXACTLY, and must keep doing
 # so. Two separate statements there depend on this map being neither too small
 # nor too large:
 #
