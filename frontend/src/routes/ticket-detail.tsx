@@ -169,6 +169,22 @@ export default function TicketDetail() {
                       AWS request ids: {ticket.execution.awsRequestIds.join(", ")}
                     </div>
                   )}
+                  {/* What the change actually brought into existence. Shows the
+                      ARN where AWS's response identified the account, and the
+                      bare id where it did not — never a constructed ARN. */}
+                  {ticket.execution.createdResources.length > 0 && (
+                    <div className="mt-2">
+                      <div className="text-xs text-muted-foreground">Created</div>
+                      <ul className="mt-1 space-y-0.5 font-mono text-xs">
+                        {ticket.execution.createdResources.map((resource) => (
+                          <li key={resource.id} className="break-all">
+                            <span className="text-muted-foreground">{resource.type}</span>{" "}
+                            {resource.arn ?? resource.id}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </Field>
             )}

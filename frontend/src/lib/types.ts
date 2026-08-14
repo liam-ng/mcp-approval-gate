@@ -35,12 +35,23 @@ export interface Approval {
   approvedAt: string
 }
 
+// One resource an executed ticket brought into existence. `arn` is null
+// wherever AWS's response did not identify the owning account (volumes, key
+// pairs, elastic IPs) — the executor reports the id alone rather than
+// assembling an ARN nobody could resolve. Render `arn ?? id`.
+export interface CreatedResource {
+  type: string
+  id: string
+  arn?: string | null
+}
+
 export interface Execution {
   startedAt: string
   finishedAt?: string | null
   outcome?: "success" | "failure" | null
   message?: string | null
   awsRequestIds: string[]
+  createdResources: CreatedResource[]
 }
 
 export interface Ticket {

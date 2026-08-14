@@ -125,6 +125,7 @@ async def test_execution_events_predating_created_resources_still_fold(repo, tmp
     await repo.append_event(
         ticket.ticket_id, 1, make_event(ticket, "EXECUTION_STARTED", to_status="EXECUTING")
     )
+    ticket = await repo.get_ticket(ticket.ticket_id)
     await repo.append_event(
         ticket.ticket_id, 2,
         make_event(ticket, "EXECUTION_COMPLETED", to_status="CLOSED",

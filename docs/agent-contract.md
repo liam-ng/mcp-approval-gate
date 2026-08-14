@@ -184,20 +184,38 @@ the approver saw them.
   "outcome": "success",
   "message": "instance stopped",
   "awsRequestIds": ["..."],
-  "createdResources": ["i-0abc"]
+  "createdResources": [
+    {
+      "type": "instance",
+      "id": "i-0abc",
+      "arn": "arn:aws:ec2:ca-central-1:035614256871:instance/i-0abc"
+    }
+  ]
 }
 ```
 
-`createdResources` is optional and defaults to empty — send the ids of
-resources the call brought into existence, read off the SDK response
-(`RunInstances` → `Instances[].InstanceId`, `CreateVolume` → `VolumeId`, and so
-on). It is what lets an operator ask the gate "what did my ticket create"
-instead of hunting in the console, and it is surfaced by the
-`get_change_ticket_details` MCP tool. Capped at 100 ids of 128 chars; anything
-longer belongs in the audit trail by tag, not here. Never fail a call that
-already succeeded because you could not parse its response — an id you failed
-to report is recoverable from the `gateTicketId` tag, a success reported as a
-failure is not.
+`createdResources` is optional and defaults to empty — report what the call
+brought into existence, read off the SDK response (`RunInstances` →
+`Instances[].InstanceId`, `CreateVolume` → `VolumeId`, and so on). It is what
+lets an operator ask the gate "what did my ticket create" instead of hunting in
+the console, and it is surfaced by the `get_change_ticket_details` MCP tool and
+the portal's ticket detail page.
+
+**Only send an `arn` you can build from AWS's own response**, and send `null`
+otherwise. AWS hands the account back inconsistently: `RunInstances` and
+`CreateSnapshot` return `OwnerId`, `CreateSecurityGroup` returns
+`SecurityGroupArn` outright (prefer it to assembling one), and `CreateVolume`,
+`CreateKeyPair`/`ImportKeyPair` and `AllocateAddress` return neither. Do not
+substitute your own account from `sts:GetCallerIdentity` — that makes you
+*assert* an owner rather than report one, and mislabels cross-account creation.
+A null means "not observed"; a wrong ARN in an immutable audit record is worse
+than none. Key pairs are the specific trap: a key pair's ARN path is its
+`KeyName`, not the `KeyPairId` you report as `id`.
+
+Capped at 100 entries; ids 128 chars, ARNs 2048. Never fail a call that already
+succeeded because you could not parse its response — an id you failed to report
+is recoverable from the `gateTicketId` tag, a success reported as a failure is
+not.
 
 `outcome: "failure"` marks the ticket FAILED; retrying requires a new
 (superseding) ticket — never re-execute a FAILED ticket. A human creates that
