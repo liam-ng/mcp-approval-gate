@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+import os
 
-from ulid import ULID
+# MUST run before anything imports app.settings. `Settings.model_config`
+# resolves its env_file ONCE, at class-definition time, via
+# `_default_env_file()` — which picks up a developer's backend/.env.liam-dev if
+# it exists. That made local runs disagree with CI in the worst direction:
+# tests that forgot a mandatory setting passed here and failed there, because
+# CI checks out no env file at all. Pointing ENV_FILE at a path that cannot
+# exist makes every test declare its own settings explicitly, exactly as CI
+# forces. pytest imports conftest before test modules, so this lands first.
+os.environ.setdefault("ENV_FILE", "/nonexistent/tests-declare-their-own-settings.env")
 
-from app.core.canonical_json import parameters_hash
-from app.core.models import ActionDetails, Actor, AuditEvent, Ticket
+from datetime import UTC, date, datetime  # noqa: E402
+
+from ulid import ULID  # noqa: E402
+
+from app.core.canonical_json import parameters_hash  # noqa: E402
+from app.core.models import ActionDetails, Actor, AuditEvent, Ticket  # noqa: E402
 
 AGENT_ARN = "arn:aws:sts::123456789012:assumed-role/mcp-agent/session"
 

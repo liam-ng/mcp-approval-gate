@@ -22,9 +22,15 @@ from app.aws import discovery
 @pytest.fixture()
 def make_client(monkeypatch):
     def _make(enabled: bool = False):
+        # Every mandatory setting must be set here, including ones this module
+        # never reads. `Settings` validates the whole object at construction, so
+        # one missing field fails the fixture, not the feature. ALLOWED_AGENT_ARNS
+        # is the trap: a developer's backend/.env.liam-dev supplies it, so
+        # omitting it passes locally and fails in CI, which has no env file.
         monkeypatch.setenv("SESSION_SECRET", "test-secret")
         monkeypatch.setenv("AUTH_MODE", "dev")
         monkeypatch.setenv("GATE_SERVER_ID", "approval-gate-test")
+        monkeypatch.setenv("ALLOWED_AGENT_ARNS", "arn:aws:iam::123456789012:role/mcp-*")
         settings_module._settings = None
         settings = settings_module.get_settings()
         settings.aws_discovery_enabled = enabled

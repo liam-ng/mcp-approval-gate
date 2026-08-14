@@ -24,6 +24,8 @@ python -m pytest tests/test_agent_api.py -k hash_mismatch # one test by name
 ```
 `asyncio_mode = "auto"` is configured in `backend/pyproject.toml`; running pytest from the repo root instead of `backend/` makes async tests fail.
 
+`backend/tests/conftest.py` sets `ENV_FILE` to a nonexistent path before anything imports `app.settings`, so **every test must declare the settings it needs itself**. That is deliberate: `Settings.model_config` resolves its env file once at class-definition time, so a local `backend/.env.liam-dev` would otherwise supply mandatory values (`ALLOWED_AGENT_ARNS` is the usual one) that CI — which checks out no env file — does not have. Without this, a test that forgets a setting passes locally and fails in CI.
+
 Frontend (from `frontend/`):
 ```bash
 npm install
