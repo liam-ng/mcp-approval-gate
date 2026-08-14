@@ -95,6 +95,9 @@ def apply_event(ticket: Ticket, event: AuditEvent) -> Ticket:
                 "outcome": details.get("outcome"),
                 "message": details.get("message"),
                 "aws_request_ids": details.get("awsRequestIds", []),
+                # .get with a default, not [...]: events written before this
+                # field existed are re-folded from the log on every boot.
+                "created_resources": details.get("createdResources", []),
             }
         )
     elif event.type == "TAGS_UPDATED":

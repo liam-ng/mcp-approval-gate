@@ -16,8 +16,12 @@ from authlib.jose import JsonWebKey, jwt
 from httpx import Response
 from starlette.testclient import TestClient
 
+import anyio
+
 import app.settings as settings_module
 from app.api.mcp_gateway import build_mcp_app
+from app.core import service
+from app.core.schemas import ExecutionResultRequest
 from app.repo.jsonl_store import JsonlTicketRepository
 
 ISSUER = "https://idp.example.com"
@@ -260,6 +264,78 @@ def test_check_ticket_status_rejects_other_users(mcp_client):
             mcp_client,
             "tools/call",
             {"name": "check_ticket_status", "arguments": {"ticket_id": created["ticketId"]}},
+            headers=bob,
+        ).json()["result"]
+        assert result["isError"] is True
+
+
+def test_get_change_ticket_details_returns_history_and_created_resources(mcp_client):
+    """The whole point of the tool: after a ticket runs, say what it made."""
+    with respx.mock:
+        mock_idp(respx.mock)
+        alice = authed_headers(email="alice@example.com")
+        initialize(mcp_client, alice)
+        rpc(mcp_client, "notifications/initialized", headers=alice)
+        created = _create_via_mcp(mcp_client, alice)
+
+        async def _run():
+            await service.approve_ticket(mcp_client.repo, created["ticketId"], "peer@example.com", 1)
+            ticket = await mcp_client.repo.get_ticket(created["ticketId"])
+            await service.start_execution(
+                mcp_client.repo, created["ticketId"], EXECUTOR_ARN,
+                ticket.action_details.parameters_hash,
+            )
+            await service.report_execution_result(
+                mcp_client.repo, created["ticketId"], EXECUTOR_ARN,
+                ExecutionResultRequest(
+                    outcome="success", message="launched",
+                    aws_request_ids=["req-1"], created_resources=["i-0abc"],
+                ),
+            )
+
+        anyio.run(_run)
+
+        details = rpc(
+            mcp_client,
+            "tools/call",
+            {
+                "name": "get_change_ticket_details",
+                "arguments": {"ticket_id": created["ticketId"]},
+            },
+            headers=alice,
+        ).json()["result"]["structuredContent"]
+
+        assert details["status"] == "CLOSED"
+        assert details["execution"]["createdResources"] == ["i-0abc"]
+        assert details["execution"]["awsRequestIds"] == ["req-1"]
+        assert details["approvedBy"] == ["peer@example.com"]
+        types = [e["type"] for e in details["auditEvents"]]
+        assert types == ["TICKET_CREATED", "APPROVED", "EXECUTION_STARTED", "EXECUTION_COMPLETED"]
+        # TICKET_CREATED's details carry a whole serialized ticket; projecting
+        # the events is what keeps this response a readable size.
+        assert "details" not in details["auditEvents"][0]
+
+
+def test_get_change_ticket_details_rejects_other_users(mcp_client):
+    """Exposes more than check_ticket_status (approver emails, created ids), so
+    it must not be a weaker guard."""
+    with respx.mock:
+        mock_idp(respx.mock)
+        alice = authed_headers(email="alice@example.com")
+        initialize(mcp_client, alice)
+        rpc(mcp_client, "notifications/initialized", headers=alice)
+        created = _create_via_mcp(mcp_client, alice)
+
+        bob = authed_headers(email="bob@example.com")
+        initialize(mcp_client, bob)
+        rpc(mcp_client, "notifications/initialized", headers=bob)
+        result = rpc(
+            mcp_client,
+            "tools/call",
+            {
+                "name": "get_change_ticket_details",
+                "arguments": {"ticket_id": created["ticketId"]},
+            },
             headers=bob,
         ).json()["result"]
         assert result["isError"] is True

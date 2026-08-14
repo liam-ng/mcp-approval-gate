@@ -94,6 +94,13 @@ class Execution(ApiModel):
     outcome: Literal["success", "failure"] | None = None
     message: str | None = None
     aws_request_ids: list[str] = Field(default_factory=list)
+    # Ids of resources the call brought into existence (i-…, vol-…, sg-…).
+    # MUST keep a default: `apply_event` builds Execution(started_at=…) with
+    # nothing else at EXECUTION_STARTED, and the JSONL store re-folds every
+    # historical event at boot — events written before this field existed carry
+    # no createdResources, so a required field would CrashLoop the gate on its
+    # own PVC rather than fail one request.
+    created_resources: list[str] = Field(default_factory=list)
 
 
 class Actor(ApiModel):

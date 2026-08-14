@@ -410,11 +410,40 @@ def test_mcp_proposed_ticket_executes_end_to_end(client, respx_mock):
 
     r = client.post(
         f"/api/agent/tickets/{approved.ticket_id}/execution/result",
-        json={"outcome": "success", "message": "launched", "awsRequestIds": ["req-1"]},
+        json={
+            "outcome": "success",
+            "message": "launched",
+            "awsRequestIds": ["req-1"],
+            "createdResources": ["i-0abc"],
+        },
         headers={"X-Gate-Identity": identity_header()},
     )
     assert r.status_code == 200, r.json()
     assert r.json()["status"] == "CLOSED"
+    # What the ticket created has to survive the event fold, not just the POST —
+    # it is read back from the log on every boot.
+    assert r.json()["execution"]["createdResources"] == ["i-0abc"]
+
+
+@respx.mock
+def test_execution_result_without_created_resources_still_works(client, respx_mock):
+    """An executor predating the field must not be rejected — rolling the two
+    deployables in either order would otherwise strand a ticket in EXECUTING,
+    which nothing sweeps."""
+    approved = seed_mcp_ticket(client)
+    mock_sts(respx_mock)
+    client.post(
+        f"/api/agent/tickets/{approved.ticket_id}/execution/start",
+        json={"parametersHash": approved.action_details.parameters_hash},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    r = client.post(
+        f"/api/agent/tickets/{approved.ticket_id}/execution/result",
+        json={"outcome": "success", "message": "launched", "awsRequestIds": ["req-1"]},
+        headers={"X-Gate-Identity": identity_header()},
+    )
+    assert r.status_code == 200, r.json()
+    assert r.json()["execution"]["createdResources"] == []
 
 
 @respx.mock

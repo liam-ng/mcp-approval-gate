@@ -308,6 +308,7 @@ async def report_execution_result(
             "outcome": result.outcome,
             "message": result.message,
             "awsRequestIds": result.aws_request_ids,
+            "createdResources": result.created_resources,
         },
     )
     return await repo.append_event(ticket.ticket_id, ticket.seq, event)

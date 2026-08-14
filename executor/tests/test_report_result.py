@@ -22,8 +22,8 @@ class FakeGate:
         self._failures = failures
         self.calls: list[tuple] = []
 
-    def report_result(self, ticket_id, outcome, message, request_ids):
-        self.calls.append((ticket_id, outcome, message, request_ids))
+    def report_result(self, ticket_id, outcome, message, request_ids, created_resources=None):
+        self.calls.append((ticket_id, outcome, message, request_ids, created_resources or []))
         exc = self._failures.pop(0) if self._failures else None
         if exc:
             raise exc
@@ -39,7 +39,7 @@ def test_transient_failure_is_retried_until_it_lands():
     gate = FakeGate([replayed(), replayed(), None])
     executor_main._report(gate, "T1", "success", "executed as approved", ["req-1"])
     assert len(gate.calls) == 3
-    assert gate.calls[-1] == ("T1", "success", "executed as approved", ["req-1"])
+    assert gate.calls[-1] == ("T1", "success", "executed as approved", ["req-1"], [])
 
 
 def test_report_never_raises_even_when_every_attempt_fails(caplog):

@@ -48,7 +48,10 @@ def build_mcp_app(settings: Settings) -> Starlette:
             "Propose AWS EC2 changes for human approval. create_change_ticket never "
             "executes anything itself: it opens a ticket that a human approver (never "
             "you) must approve in the web portal before the trusted executor runs it. "
-            "Always surface ticketUrl to the user. Use check_ticket_status to follow up. "
+            "Always surface ticketUrl to the user. Use check_ticket_status while waiting "
+            "for approval, and get_change_ticket_details once it has run — that is the one "
+            "that reports what the change created (instance ids and similar) and the full "
+            "approval/execution history. "
             "`parameters` must be the exact boto3/SDK parameter dict for the operation — "
             "if you are not certain of the names, types or required set, call "
             "describe_operation_parameters FIRST rather than guessing. A ticket whose "
@@ -157,10 +160,14 @@ def build_mcp_app(settings: Settings) -> Starlette:
         except UnknownOperation as exc:
             raise ValueError(str(exc)) from exc
 
-    @server.tool(structured_output=True)
-    async def check_ticket_status(ticket_id: str) -> dict[str, Any]:
-        """Check the status of a ticket previously opened with
-        create_change_ticket. Only APPROVED tickets will eventually execute."""
+    async def _own_ticket(ticket_id: str):
+        """Fetch a ticket, enforcing that the caller proposed it.
+
+        Shared by both read tools so the ownership rule cannot drift between
+        them — the details tool exposes strictly more than the status tool
+        (approver identities, comments, created resource ids), so it needs the
+        same guard, never a weaker one.
+        """
         access_token = get_access_token()
         repo = get_repo()
         ticket = await repo.get_ticket(ticket_id)
@@ -172,12 +179,101 @@ def build_mcp_app(settings: Settings) -> Starlette:
             and ticket.proposed_by.lower() != access_token.subject.lower()
         ):
             raise ValueError("you may only check tickets you proposed")
+        return ticket, repo
+
+    @server.tool(structured_output=True)
+    async def check_ticket_status(ticket_id: str) -> dict[str, Any]:
+        """Poll whether a ticket has been approved yet. Cheap — use this while
+        waiting.
+
+        Returns status and little else. Only APPROVED tickets will eventually
+        execute; a ticket stays PENDING_APPROVAL until a human acts on it.
+        Once it reaches a terminal status (CLOSED, FAILED, REJECTED, EXPIRED)
+        stop polling and call get_change_ticket_details instead, which is the
+        tool that says what actually happened.
+        """
+        ticket, _ = await _own_ticket(ticket_id)
         return {
             "ticketId": ticket.ticket_id,
             "status": ticket.status,
             "approvedBy": [a.approved_by for a in ticket.approvals],
             "rejectionReason": ticket.rejection_reason,
             "supersededBy": ticket.superseded_by,
+        }
+
+    @server.tool(structured_output=True)
+    async def get_change_ticket_details(ticket_id: str) -> dict[str, Any]:
+        """Everything that happened to a ticket: what ran, what it created, and
+        the full audit history.
+
+        Use this once a ticket has executed — to find the id of an instance (or
+        volume, security group, snapshot) that a RunInstances/Create* ticket
+        brought into existence, to read the failure message of one that did
+        not, or to show the operator who approved what and when. For "is it
+        approved yet", use check_ticket_status instead; this returns far more.
+
+        `execution.createdResources` holds the ids the call created, and
+        `execution.awsRequestIds` are the CloudTrail join keys. Both are empty
+        for tickets executed before the gate started recording created ids — in
+        that case find the resources by their tag instead, which the gate sets
+        on everything it creates:
+        `aws ec2 describe-instances --filters Name=tag:gateTicketId,Values=<ticketId>`.
+
+        `auditEvents` is the ordered history (proposed, approved, executed,
+        superseded, commented) with the actor for each.
+        """
+        ticket, repo = await _own_ticket(ticket_id)
+        events = await repo.list_audit_events(ticket_id)
+        execution = ticket.execution
+        return {
+            "ticketId": ticket.ticket_id,
+            "subject": ticket.subject,
+            "status": ticket.status,
+            "proposedBy": ticket.proposed_by,
+            "plannedAction": ticket.planned_action,
+            "actionDetails": {
+                "service": ticket.action_details.service,
+                "operation": ticket.action_details.operation,
+                "region": ticket.action_details.region,
+                # The approved parameters, which include the TagSpecifications
+                # the gate injected — not necessarily what was proposed.
+                "parameters": ticket.action_details.parameters,
+                "resourceArns": ticket.action_details.resource_arns,
+                "reason": ticket.action_details.reason,
+            },
+            "tags": ticket.tags,
+            "approvedBy": [a.approved_by for a in ticket.approvals],
+            "rejectedBy": ticket.rejected_by,
+            "rejectionReason": ticket.rejection_reason,
+            "supersedes": ticket.supersedes,
+            "supersededBy": ticket.superseded_by,
+            "execution": None
+            if execution is None
+            else {
+                "startedAt": execution.started_at.isoformat(),
+                "finishedAt": execution.finished_at.isoformat()
+                if execution.finished_at
+                else None,
+                "outcome": execution.outcome,
+                "message": execution.message,
+                "awsRequestIds": execution.aws_request_ids,
+                "createdResources": execution.created_resources,
+            },
+            # Projected, never dumped raw: TICKET_CREATED's `details` carries a
+            # complete serialized copy of the ticket (service.py's _event call),
+            # so returning `details` verbatim would be enormous and duplicate
+            # everything above it.
+            "auditEvents": [
+                {
+                    "seq": event.seq,
+                    "timestamp": event.timestamp.isoformat(),
+                    "type": event.type,
+                    "actor": event.actor.id,
+                    "fromStatus": event.from_status,
+                    "toStatus": event.to_status,
+                }
+                for event in events
+            ],
         }
 
     @server.tool(structured_output=True)

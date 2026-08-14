@@ -180,8 +180,24 @@ the approver saw them.
 ### 5. Report — `POST /api/agent/tickets/{id}/execution/result`
 
 ```json
-{"outcome": "success", "message": "instance stopped", "awsRequestIds": ["..."]}
+{
+  "outcome": "success",
+  "message": "instance stopped",
+  "awsRequestIds": ["..."],
+  "createdResources": ["i-0abc"]
+}
 ```
+
+`createdResources` is optional and defaults to empty — send the ids of
+resources the call brought into existence, read off the SDK response
+(`RunInstances` → `Instances[].InstanceId`, `CreateVolume` → `VolumeId`, and so
+on). It is what lets an operator ask the gate "what did my ticket create"
+instead of hunting in the console, and it is surfaced by the
+`get_change_ticket_details` MCP tool. Capped at 100 ids of 128 chars; anything
+longer belongs in the audit trail by tag, not here. Never fail a call that
+already succeeded because you could not parse its response — an id you failed
+to report is recoverable from the `gateTicketId` tag, a success reported as a
+failure is not.
 
 `outcome: "failure"` marks the ticket FAILED; retrying requires a new
 (superseding) ticket — never re-execute a FAILED ticket. A human creates that

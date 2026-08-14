@@ -44,7 +44,8 @@ def _handle_signal(signum: int, _frame: FrameType | None) -> None:
 
 
 def _report(
-    gate: GateClient, ticket_id: str, outcome: str, message: str, request_ids: list[str]
+    gate: GateClient, ticket_id: str, outcome: str, message: str, request_ids: list[str],
+    created_resources: list[str] | None = None,
 ) -> None:
     """Land the outcome, retrying. MUST NOT RAISE.
 
@@ -55,7 +56,7 @@ def _report(
     """
     for attempt in range(1, _REPORT_ATTEMPTS + 1):
         try:
-            gate.report_result(ticket_id, outcome, message, request_ids)
+            gate.report_result(ticket_id, outcome, message, request_ids, created_resources or [])
             return
         except GateError as exc:
             # The gate already moved it (a concurrent replica, or a human). Retrying cannot win.
@@ -114,7 +115,7 @@ def process_ticket(gate: GateClient, ticket: dict[str, Any]) -> None:
     )
 
     try:
-        request_ids = execute(action_details)
+        request_ids, created_resources = execute(action_details)
     except ExecutionFailed as exc:
         log.error("%s: execution failed: %s", ticket_id, exc)
         # Report before raising anything else: a ticket stuck in EXECUTING is
@@ -126,8 +127,10 @@ def process_ticket(gate: GateClient, ticket: dict[str, Any]) -> None:
         _report(gate, ticket_id, "failure", f"unexpected error: {exc}", [])
         return
 
-    _report(gate, ticket_id, "success", "executed as approved", request_ids)
-    log.info("%s: done, awsRequestIds=%s", ticket_id, request_ids)
+    _report(gate, ticket_id, "success", "executed as approved", request_ids, created_resources)
+    log.info(
+        "%s: done, awsRequestIds=%s created=%s", ticket_id, request_ids, created_resources
+    )
 
 
 def main() -> int:

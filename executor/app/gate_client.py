@@ -137,7 +137,12 @@ class GateClient:
         outcome: str,
         message: str,
         aws_request_ids: list[str],
+        created_resources: list[str] | None = None,
     ) -> dict[str, Any]:
+        # created_resources defaults so this stays callable the old way, and a
+        # gate predating the field ignores it (ApiModel doesn't forbid extras),
+        # so executor and backend can be rolled out in either order without a
+        # failed result stranding a ticket in EXECUTING.
         return self._request(
             "POST",
             f"/api/agent/tickets/{ticket_id}/execution/result",
@@ -145,5 +150,6 @@ class GateClient:
                 "outcome": outcome,
                 "message": message[:1000],
                 "awsRequestIds": aws_request_ids,
+                "createdResources": created_resources or [],
             },
         )
