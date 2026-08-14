@@ -414,7 +414,13 @@ def test_mcp_proposed_ticket_executes_end_to_end(client, respx_mock):
             "outcome": "success",
             "message": "launched",
             "awsRequestIds": ["req-1"],
-            "createdResources": ["i-0abc"],
+            "createdResources": [
+                {
+                    "type": "instance",
+                    "id": "i-0abc",
+                    "arn": "arn:aws:ec2:ap-east-1:123456789012:instance/i-0abc",
+                }
+            ],
         },
         headers={"X-Gate-Identity": identity_header()},
     )
@@ -422,7 +428,13 @@ def test_mcp_proposed_ticket_executes_end_to_end(client, respx_mock):
     assert r.json()["status"] == "CLOSED"
     # What the ticket created has to survive the event fold, not just the POST —
     # it is read back from the log on every boot.
-    assert r.json()["execution"]["createdResources"] == ["i-0abc"]
+    assert r.json()["execution"]["createdResources"] == [
+        {
+            "type": "instance",
+            "id": "i-0abc",
+            "arn": "arn:aws:ec2:ap-east-1:123456789012:instance/i-0abc",
+        }
+    ]
 
 
 @respx.mock

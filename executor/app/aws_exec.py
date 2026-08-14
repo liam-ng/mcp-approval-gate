@@ -33,29 +33,83 @@ class ExecutionFailed(RuntimeError):
     """The AWS call itself failed. Reported to the gate as outcome=failure."""
 
 
-# Operation -> how to pull the ids of what it created out of the response.
+def _entry(kind: str, resource_id: str, arn: str | None = None) -> dict[str, Any]:
+    return {"type": kind, "id": resource_id, "arn": arn}
+
+
+def _ec2_arn(region: str, account: str | None, kind: str, path_id: str) -> str | None:
+    """An ARN only when the account came from AWS. None is a valid answer.
+
+    NEVER construct an ARN from an assumed account. A null tells a reader "we
+    did not learn this"; a plausible-looking wrong ARN in an audit trail is
+    worse than nothing, because the whole purpose of the record is that someone
+    can follow it back to a real resource.
+    """
+    if not account:
+        return None
+    return f"arn:aws:ec2:{region}:{account}:{kind}/{path_id}"
+
+
+# Operation -> what it created, as {type, id, arn} entries.
 #
 # Deliberately a curated map and NOT a generic "any key ending in Id" scan:
 # every response carries ResponseMetadata.RequestId, which such a scan would
-# report as a created resource. Unknown operations yield nothing, which is the
-# right answer for the mutate-existing ones — they create nothing.
+# report as a created resource.
+#
+# ARNs are built ONLY from data the response itself carried. AWS hands back the
+# account in different ways per operation and sometimes not at all:
+#   * RunInstances / CreateSnapshot return OwnerId, so the ARN is derivable.
+#   * CreateSecurityGroup returns SecurityGroupArn outright — prefer it over
+#     assembling one.
+#   * CreateVolume, CreateKeyPair, ImportKeyPair and AllocateAddress return
+#     neither, so those entries carry arn=None. (OutpostArn is the Outpost, not
+#     the resource — not a substitute.)
+# The executor could learn its account from sts:GetCallerIdentity, but that
+# would make it *assert* the resource's owner rather than report what AWS said,
+# and cross-account creation would then be silently mislabelled.
+#
+# Key pairs are the specific trap: a key pair's ARN path is its KeyName, not
+# the KeyPairId this reports as `id`, so `key-pair/{id}` would be a wrong ARN
+# that looks right.
 #
 # Only the PRIMARY resource per operation. A RunInstances also creates volumes
 # and network interfaces, whose ids are in the same response; they are not
-# captured here, so do not treat this list as exhaustive. The gateTicketId tag
-# is what finds every resource a ticket produced.
+# captured here, so this is not exhaustive — the gateTicketId tag is what finds
+# everything a ticket produced.
 _CREATED_RESOURCE_EXTRACTORS: dict[str, Any] = {
-    "RunInstances": lambda r: [i["InstanceId"] for i in r.get("Instances", [])],
-    "CreateVolume": lambda r: [r["VolumeId"]] if r.get("VolumeId") else [],
-    "CreateSecurityGroup": lambda r: [r["GroupId"]] if r.get("GroupId") else [],
-    "CreateSnapshot": lambda r: [r["SnapshotId"]] if r.get("SnapshotId") else [],
-    "CreateKeyPair": lambda r: [r["KeyPairId"]] if r.get("KeyPairId") else [],
-    "ImportKeyPair": lambda r: [r["KeyPairId"]] if r.get("KeyPairId") else [],
-    "AllocateAddress": lambda r: [r["AllocationId"]] if r.get("AllocationId") else [],
+    "RunInstances": lambda r, region: [
+        _entry("instance", i["InstanceId"],
+               _ec2_arn(region, r.get("OwnerId"), "instance", i["InstanceId"]))
+        for i in r.get("Instances", [])
+        if i.get("InstanceId")
+    ],
+    "CreateSecurityGroup": lambda r, region: (
+        [_entry("security-group", r["GroupId"], r.get("SecurityGroupArn"))]
+        if r.get("GroupId") else []
+    ),
+    "CreateSnapshot": lambda r, region: (
+        [_entry("snapshot", r["SnapshotId"],
+                _ec2_arn(region, r.get("OwnerId"), "snapshot", r["SnapshotId"]))]
+        if r.get("SnapshotId") else []
+    ),
+    "CreateVolume": lambda r, region: (
+        [_entry("volume", r["VolumeId"])] if r.get("VolumeId") else []
+    ),
+    "CreateKeyPair": lambda r, region: (
+        [_entry("key-pair", r["KeyPairId"])] if r.get("KeyPairId") else []
+    ),
+    "ImportKeyPair": lambda r, region: (
+        [_entry("key-pair", r["KeyPairId"])] if r.get("KeyPairId") else []
+    ),
+    "AllocateAddress": lambda r, region: (
+        [_entry("elastic-ip", r["AllocationId"])] if r.get("AllocationId") else []
+    ),
 }
 
 
-def _created_resources(operation: str, response: dict[str, Any]) -> list[str]:
+def _created_resources(
+    operation: str, region: str, response: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Never raises: a surprise response shape must not fail a call that worked.
 
     By the time this runs the AWS mutation has already happened. Losing the id
@@ -63,22 +117,23 @@ def _created_resources(operation: str, response: dict[str, Any]) -> list[str]:
     reported failure would be a lie in the audit trail.
     """
     extractor = _CREATED_RESOURCE_EXTRACTORS.get(operation)
-    if extractor is None:
+    if extractor is None:  # every mutate-existing operation lands here
         return []
     try:
-        return [str(value) for value in extractor(response) if value]
+        return extractor(response, region)
     except Exception:  # noqa: BLE001
-        log.warning("could not extract created resource ids from %s response", operation)
+        log.warning("could not extract created resources from %s response", operation)
         return []
 
 
-def execute(action_details: dict[str, Any]) -> tuple[list[str], list[str]]:
+def execute(action_details: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
     """Run the approved call.
 
-    Returns (aws_request_ids, created_resource_ids) — the first is the
-    CloudTrail join key for the audit trail, the second is what the call
-    brought into existence, so an operator can ask the gate "what did my
-    ticket create" instead of going hunting in the console.
+    Returns (aws_request_ids, created_resources) — the first is the CloudTrail
+    join key for the audit trail, the second is what the call brought into
+    existence as {type, id, arn} entries, so an operator can ask the gate "what
+    did my ticket create" instead of going hunting in the console. `arn` is
+    None wherever AWS's response did not tell us the account.
     """
     service = action_details["service"]
     operation = action_details["operation"]
@@ -119,5 +174,5 @@ def execute(action_details: dict[str, Any]) -> tuple[list[str], list[str]]:
     request_id = response.get("ResponseMetadata", {}).get("RequestId")
     return (
         [request_id] if request_id else [],
-        _created_resources(operation, response),
+        _created_resources(operation, region, response),
     )

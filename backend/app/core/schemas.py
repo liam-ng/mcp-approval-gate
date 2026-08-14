@@ -75,17 +75,24 @@ class ExecutionStartResponse(ApiModel):
     action_details: ActionDetails  # the agent must execute exactly this
 
 
+class CreatedResourceIn(ApiModel):
+    """Agent-supplied created-resource entry. Lengths capped because this is
+    written straight into the immutable audit log."""
+
+    type: str = Field(max_length=64)
+    id: str = Field(max_length=128)
+    arn: str | None = Field(default=None, max_length=2048)
+
+
 class ExecutionResultRequest(ApiModel):
     outcome: Literal["success", "failure"]
     message: str | None = Field(default=None, max_length=2000)
     aws_request_ids: list[str] = Field(default_factory=list)
-    # Ids of resources the call created. Optional, and bounded like `message`
-    # is — this lands in the audit log verbatim, so an agent must not be able to
-    # write an unbounded blob into it. Empty from an executor predating the
-    # field, which is why the default matters as much as the cap.
-    created_resources: list[Annotated[str, Field(max_length=128)]] = Field(
-        default_factory=list, max_length=100
-    )
+    # What the call created, as {type, id, arn}. Optional, and bounded like
+    # `message` is — this lands in the audit log verbatim, so an agent must not
+    # be able to write an unbounded blob into it. Empty from an executor
+    # predating the field, which is why the default matters as much as the cap.
+    created_resources: list[CreatedResourceIn] = Field(default_factory=list, max_length=100)
 
 
 class RejectRequest(ApiModel):

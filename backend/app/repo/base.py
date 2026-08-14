@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from app.core.models import AuditEvent, Execution, Ticket, TicketStatus
+from app.core.models import AuditEvent, CreatedResource, Execution, Ticket, TicketStatus
 
 
 class RepoError(Exception):
@@ -97,7 +97,13 @@ def apply_event(ticket: Ticket, event: AuditEvent) -> Ticket:
                 "aws_request_ids": details.get("awsRequestIds", []),
                 # .get with a default, not [...]: events written before this
                 # field existed are re-folded from the log on every boot.
-                "created_resources": details.get("createdResources", []),
+                # Validated explicitly because model_copy(update=...) does NOT
+                # validate — without this the field holds raw dicts from the
+                # event log and every reader that treats it as a model breaks.
+                "created_resources": [
+                    CreatedResource.model_validate(item)
+                    for item in details.get("createdResources", [])
+                ],
             }
         )
     elif event.type == "TAGS_UPDATED":

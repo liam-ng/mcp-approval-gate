@@ -88,19 +88,33 @@ class Approval(ApiModel):
     approved_at: datetime
 
 
+class CreatedResource(ApiModel):
+    """One resource an executed ticket brought into existence.
+
+    `arn` is nullable and is populated ONLY when AWS's own response carried
+    enough to build it (RunInstances and CreateSnapshot return OwnerId,
+    CreateSecurityGroup returns SecurityGroupArn outright). Everything else
+    records the id with `arn: null` rather than an assembled guess — an ARN
+    nobody can resolve is worse than an absent one in a traceability record.
+    """
+
+    type: str  # instance | volume | security-group | snapshot | key-pair | elastic-ip
+    id: str
+    arn: str | None = None
+
+
 class Execution(ApiModel):
     started_at: datetime
     finished_at: datetime | None = None
     outcome: Literal["success", "failure"] | None = None
     message: str | None = None
     aws_request_ids: list[str] = Field(default_factory=list)
-    # Ids of resources the call brought into existence (i-…, vol-…, sg-…).
-    # MUST keep a default: `apply_event` builds Execution(started_at=…) with
-    # nothing else at EXECUTION_STARTED, and the JSONL store re-folds every
-    # historical event at boot — events written before this field existed carry
-    # no createdResources, so a required field would CrashLoop the gate on its
-    # own PVC rather than fail one request.
-    created_resources: list[str] = Field(default_factory=list)
+    # What the call brought into existence. MUST keep a default: `apply_event`
+    # builds Execution(started_at=…) with nothing else at EXECUTION_STARTED, and
+    # the JSONL store re-folds every historical event at boot — events written
+    # before this field existed carry no createdResources, so a required field
+    # would CrashLoop the gate on its own PVC rather than fail one request.
+    created_resources: list["CreatedResource"] = Field(default_factory=list)
 
 
 class Actor(ApiModel):

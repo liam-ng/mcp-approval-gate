@@ -289,7 +289,11 @@ def test_get_change_ticket_details_returns_history_and_created_resources(mcp_cli
                 mcp_client.repo, created["ticketId"], EXECUTOR_ARN,
                 ExecutionResultRequest(
                     outcome="success", message="launched",
-                    aws_request_ids=["req-1"], created_resources=["i-0abc"],
+                    aws_request_ids=["req-1"],
+                    created_resources=[
+                        {"type": "instance", "id": "i-0abc",
+                         "arn": "arn:aws:ec2:ap-east-1:123456789012:instance/i-0abc"}
+                    ],
                 ),
             )
 
@@ -306,7 +310,10 @@ def test_get_change_ticket_details_returns_history_and_created_resources(mcp_cli
         ).json()["result"]["structuredContent"]
 
         assert details["status"] == "CLOSED"
-        assert details["execution"]["createdResources"] == ["i-0abc"]
+        assert details["execution"]["createdResources"] == [
+            {"type": "instance", "id": "i-0abc",
+             "arn": "arn:aws:ec2:ap-east-1:123456789012:instance/i-0abc"}
+        ]
         assert details["execution"]["awsRequestIds"] == ["req-1"]
         assert details["approvedBy"] == ["peer@example.com"]
         types = [e["type"] for e in details["auditEvents"]]

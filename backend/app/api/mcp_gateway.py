@@ -212,11 +212,14 @@ def build_mcp_app(settings: Settings) -> Starlette:
         not, or to show the operator who approved what and when. For "is it
         approved yet", use check_ticket_status instead; this returns far more.
 
-        `execution.createdResources` holds the ids the call created, and
-        `execution.awsRequestIds` are the CloudTrail join keys. Both are empty
-        for tickets executed before the gate started recording created ids — in
-        that case find the resources by their tag instead, which the gate sets
-        on everything it creates:
+        `execution.createdResources` lists what the call created as
+        `{type, id, arn}` — for a launch that is the EC2 instance id and its
+        full ARN. `arn` is null where AWS's response did not identify the
+        owning account (volumes, key pairs, elastic IPs); use `id` there rather
+        than assembling an ARN yourself. `execution.awsRequestIds` are the
+        CloudTrail join keys. Both are empty for tickets executed before the
+        gate started recording this — in that case find the resources by their
+        tag instead, which the gate sets on everything it creates:
         `aws ec2 describe-instances --filters Name=tag:gateTicketId,Values=<ticketId>`.
 
         `auditEvents` is the ordered history (proposed, approved, executed,
@@ -257,7 +260,10 @@ def build_mcp_app(settings: Settings) -> Starlette:
                 "outcome": execution.outcome,
                 "message": execution.message,
                 "awsRequestIds": execution.aws_request_ids,
-                "createdResources": execution.created_resources,
+                "createdResources": [
+                    {"type": r.type, "id": r.id, "arn": r.arn}
+                    for r in execution.created_resources
+                ],
             },
             # Projected, never dumped raw: TICKET_CREATED's `details` carries a
             # complete serialized copy of the ticket (service.py's _event call),

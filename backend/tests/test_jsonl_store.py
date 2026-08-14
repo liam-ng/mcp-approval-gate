@@ -81,6 +81,61 @@ async def test_fold_rebuild_after_restart(repo, tmp_path):
     assert [e.type for e in events] == ["TICKET_CREATED", "APPROVED"]
 
 
+async def test_created_resources_survive_the_fold_as_models(repo, tmp_path):
+    """`model_copy(update=...)` does NOT validate.
+
+    The fold rebuilds `execution` with `model_copy`, so a nested field read
+    straight out of the event's JSON `details` stays a plain dict unless it is
+    validated explicitly — and every reader that does `resource.arn` then fails
+    with "'dict' object has no attribute". Caught exactly that way in the MCP
+    details tool. Asserted after a reopen, because that is the path every boot
+    takes over the whole existing log.
+    """
+    ticket = await seed(repo)
+    started = make_event(ticket, "EXECUTION_STARTED", to_status="EXECUTING")
+    await repo.append_event(ticket.ticket_id, 1, started)
+    # make_event derives seq from the ticket handed to it, so re-read it —
+    # the local copy is one event stale.
+    ticket = await repo.get_ticket(ticket.ticket_id)
+    completed = make_event(
+        ticket, "EXECUTION_COMPLETED", to_status="CLOSED",
+        details={
+            "outcome": "success",
+            "message": "launched",
+            "awsRequestIds": ["req-1"],
+            "createdResources": [
+                {"type": "instance", "id": "i-0abc",
+                 "arn": "arn:aws:ec2:ca-central-1:1:instance/i-0abc"}
+            ],
+        },
+    )
+    await repo.append_event(ticket.ticket_id, 2, completed)
+
+    reopened = JsonlTicketRepository(str(tmp_path))
+    got = await reopened.get_ticket(ticket.ticket_id)
+    (resource,) = got.execution.created_resources
+    assert resource.type == "instance"
+    assert resource.id == "i-0abc"
+    assert resource.arn == "arn:aws:ec2:ca-central-1:1:instance/i-0abc"
+
+
+async def test_execution_events_predating_created_resources_still_fold(repo, tmp_path):
+    """Every EXECUTION_COMPLETED already on the PVC lacks the key entirely."""
+    ticket = await seed(repo)
+    await repo.append_event(
+        ticket.ticket_id, 1, make_event(ticket, "EXECUTION_STARTED", to_status="EXECUTING")
+    )
+    await repo.append_event(
+        ticket.ticket_id, 2,
+        make_event(ticket, "EXECUTION_COMPLETED", to_status="CLOSED",
+                   details={"outcome": "success", "message": "done", "awsRequestIds": []}),
+    )
+    reopened = JsonlTicketRepository(str(tmp_path))
+    got = await reopened.get_ticket(ticket.ticket_id)
+    assert got.status == "CLOSED"
+    assert got.execution.created_resources == []
+
+
 async def test_torn_final_line_recovery(repo, tmp_path):
     ticket = await seed(repo)
     log = tmp_path / "tickets.jsonl"

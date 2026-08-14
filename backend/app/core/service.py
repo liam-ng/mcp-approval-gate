@@ -308,7 +308,11 @@ async def report_execution_result(
             "outcome": result.outcome,
             "message": result.message,
             "awsRequestIds": result.aws_request_ids,
-            "createdResources": result.created_resources,
+            # Serialized to plain dicts: audit event `details` is persisted as
+            # JSON and re-parsed on every boot fold, so it must not hold models.
+            "createdResources": [
+                r.model_dump(mode="json", by_alias=True) for r in result.created_resources
+            ],
         },
     )
     return await repo.append_event(ticket.ticket_id, ticket.seq, event)
