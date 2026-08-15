@@ -129,7 +129,7 @@ kubectl kustomize apps/mcp-approval-gate/overlays/liam-dev | kubectl diff -f -
 - Secrets (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`) come from Azure Key Vault via External Secrets — see overlay's `eso-*.yaml`. No secret value stored in either repo.
 - Argo CD `prune` deletes cluster objects that leave the overlay, so removing a manifest from git is the undeploy path (one Application per app, so the blast radius is that namespace).
 - Argo CD `selfHeal` reverts live drift back to the kustomize overlay — git is the desired state, not a one-shot `kubectl apply`.
-
+- ArgoCD repo stores one read-only Deploy Key for ArgoCD to monitor changes to the repo, and one writeable Deploy Key for APP CI Workflow to push image tags to the k8s manifest.
 
 
 ## Security notes

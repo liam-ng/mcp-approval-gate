@@ -26,3 +26,4 @@ data/
 # Docs
 .claude/
 docs/
+*.excalidraw
