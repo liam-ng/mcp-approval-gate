@@ -16,13 +16,6 @@ Frontend and backend are separate images served by HTTPRoute
 (F5 NGINX Gateway Fabric) that splits traffic by path, so the browser
 sees a single origin and the session cookie needs no CORS setup.
 
-Also see 
-
-- [Living Plan docs/plan.md](docs/plan.md),
-- [MCP-server Integration docs/agent-contract.md](docs/agent-contract.md),
-- [IDE/MCP setup, OAuth flow, Istio + SCP isolation docs/mcp-gateway.md](docs/mcp-gateway.md).
-
-
 
 ## Features
 
@@ -42,8 +35,14 @@ unreachable any other way.
 **Kubernetes manifests live in a different repo**: kustomize `base/` + `overlays/` + `overlays/template`), reconciled by Argo CD.
 One cross-repo coupling to keep in mind: `frontend/vite.config.ts`'s dev-proxy prefix list (`/api`, `/mcp`, `/.well-known`) must stay in step with that repo's `base/httproute.yaml`.
 
-## Ticket lifecycle
+<img width="2532" height="1481" alt="image" src="https://github.com/user-attachments/assets/5f41c529-6cd7-45c2-b36e-776774f4549c" />
 
+
+## Auth Flow
+
+<img width="1908" height="967" alt="image" src="https://github.com/user-attachments/assets/904c7e8b-b67b-4ca7-8315-f33c91c31a94" />
+
+### Ticket Lifecycle
 ```
 PENDING_APPROVAL ─approve(n≥required)→ APPROVED ─start(hash echo)→ EXECUTING → CLOSED|FAILED
    │        │      │                     │   │      │
