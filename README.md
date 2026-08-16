@@ -121,6 +121,9 @@ docker build -t <REGISTRY>/mcp-approval-gate-executor:TAG ./executor
 
 # (NOT Covered) Deployment
 
+<img width="1080" height="480" alt="image" src="https://github.com/user-attachments/assets/c5ab50ac-85bd-47de-a6df-afbcd2b563be" />
+
+
 Current designed rollout pattern is GitOps, not `kubectl`. Argo CD reconciles the manifests which is not included in this repo.
 To render or drift-check from a clone of that repo:
 
