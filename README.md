@@ -2,6 +2,9 @@
 
 A **blocking approval gate** that adds auditability, traceability, and human control to changes an IDE AI agent made. Before any mutating action, the agent must create a change-request ticket, wait for human approval through mail or web portal, an executor will carry out exactly the approved parameters, and report the result back to portal.
 
+<img width="1459" height="792" alt="image" src="https://github.com/user-attachments/assets/4e8b9fb9-e91d-42bd-a028-85dacb396ef5" />
+
+
 ## MCP Approval Gate Components
 
 
