@@ -2,6 +2,9 @@
 
 A **blocking approval gate** that adds auditability, traceability, and human control to changes an IDE AI agent made. Before any mutating action, the agent must create a change-request ticket, wait for human approval through mail or web portal, an executor will carry out exactly the approved parameters, and report the result back to portal.
 
+<img width="1459" height="792" alt="image" src="https://github.com/user-attachments/assets/4e8b9fb9-e91d-42bd-a028-85dacb396ef5" />
+
+
 ## MCP Approval Gate Components
 
 
@@ -15,13 +18,6 @@ A **blocking approval gate** that adds auditability, traceability, and human con
 Frontend and backend are separate images served by HTTPRoute
 (F5 NGINX Gateway Fabric) that splits traffic by path, so the browser
 sees a single origin and the session cookie needs no CORS setup.
-
-Also see 
-
-- [Living Plan docs/plan.md](docs/plan.md),
-- [MCP-server Integration docs/agent-contract.md](docs/agent-contract.md),
-- [IDE/MCP setup, OAuth flow, Istio + SCP isolation docs/mcp-gateway.md](docs/mcp-gateway.md).
-
 
 
 ## Features
@@ -42,8 +38,14 @@ unreachable any other way.
 **Kubernetes manifests live in a different repo**: kustomize `base/` + `overlays/` + `overlays/template`), reconciled by Argo CD.
 One cross-repo coupling to keep in mind: `frontend/vite.config.ts`'s dev-proxy prefix list (`/api`, `/mcp`, `/.well-known`) must stay in step with that repo's `base/httproute.yaml`.
 
-## Ticket lifecycle
+<img width="2532" height="1481" alt="image" src="https://github.com/user-attachments/assets/5f41c529-6cd7-45c2-b36e-776774f4549c" />
 
+
+## Auth Flow
+
+<img width="1908" height="967" alt="image" src="https://github.com/user-attachments/assets/904c7e8b-b67b-4ca7-8315-f33c91c31a94" />
+
+### Ticket Lifecycle
 ```
 PENDING_APPROVAL ─approve(n≥required)→ APPROVED ─start(hash echo)→ EXECUTING → CLOSED|FAILED
    │        │      │                     │   │      │
@@ -118,6 +120,9 @@ docker build -t <REGISTRY>/mcp-approval-gate-executor:TAG ./executor
 
 
 # (NOT Covered) Deployment
+
+<img width="1080" height="480" alt="image" src="https://github.com/user-attachments/assets/c5ab50ac-85bd-47de-a6df-afbcd2b563be" />
+
 
 Current designed rollout pattern is GitOps, not `kubectl`. Argo CD reconciles the manifests which is not included in this repo.
 To render or drift-check from a clone of that repo:
