@@ -36,6 +36,7 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           # SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           DEPLOY_REPO_SSH_KEY: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
+          MANIFEST_REPO_PR_TOKEN: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
           # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
         # require() Hard and note() Soft gate functions are used to check if the required secrets are configured
@@ -73,7 +74,13 @@ jobs:
           # scans and publishes the image correctly -- only the manifest-repo
           # bump is skipped, so the image exists but nothing deploys it. Making
           # it required would fail every PR too, which it has no part in.
-          note DEPLOY_REPO_SSH_KEY "write deploy key for liam-dev-k8s-argoCD; without it the image publishes but the deploy job cannot commit the tag, so Argo never sees it" || true
+          note DEPLOY_REPO_SSH_KEY "write deploy key for liam-dev-k8s-argoCD; without it the image publishes but the deploy job cannot push the bump branch, so no PR gets opened" || true
+          # Fine-grained PAT or GitHub App installation token, NOT a classic PAT --
+          # scoped to pull-requests:write + contents:read on liam-dev-k8s-argoCD only.
+          # Separate credential from the SSH key above: that one authenticates git
+          # (push the branch), this one authenticates the GitHub API (open the PR) --
+          # `gh pr create` needs its own token regardless of how the branch got there.
+          note MANIFEST_REPO_PR_TOKEN "PR-open token for liam-dev-k8s-argoCD; without it the branch pushes but no PR gets opened, so a human has to open it by hand" || true
 
           echo "--------------------------------"
           echo "Optional Secrets:"
@@ -293,27 +300,22 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Close the GitOps loop. Argo CD does not watch registries, so pushing an
-  # image is not a deployment -- committing its tag to the manifest repo is what
-  # makes a merge actually roll out. This is also what makes the deployed
-  # revision a recorded fact rather than "whatever :main pointed at last".
+  # image is not a deployment -- landing its tag in the manifest repo's main is
+  # what makes a merge actually roll out. This job PROPOSES that via a PR
+  # rather than pushing straight to main -- see the PR's own description for
+  # why. Health-check-and-revert-on-failure now lives entirely in the manifest
+  # repo (verify-and-rollback.yml there), triggered by ITS OWN push to main,
+  # because a PR merge can happen minutes or days after this job runs -- there
+  # is no "immediately after" moment in this workflow to chain a followup job
+  # onto anymore.
   deploy:
-    name: Bump backend image in the manifest repo
+    name: Open a backend image-bump PR against the manifest repo
     needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: liam-dev
     permissions:
       contents: read
-    # A merge touching backend, frontend and executor fires all three workflows
-    # at once, and they all write the same file in the same repo. Serialize them
-    # or the second and third pushes race and lose.
-    #
-    # cancel-in-progress is stated explicitly even though false is the default:
-    # a cancelled deploy job would silently drop an image bump behind a green
-    # tick, which is the worst possible failure mode for this job.
-    concurrency:
-      group: deploy-repo-write
-      cancel-in-progress: false
     steps:
       - name: Checkout the manifest repo
         uses: actions/checkout@v7
@@ -322,10 +324,12 @@ jobs:
           # Deploy key with WRITE access -- a different key from the read-only
           # one Argo CD reads this repo with. Using ssh-key (not token) also
           # points the remote at git@github.com, which is what that key serves.
+          # Still needed even though this job no longer pushes to main: opening
+          # a PR still means pushing the proposal BRANCH somewhere, and this key
+          # is what's authorized to do that. See the PR description below for
+          # why this can't be narrowed away by the PR-flow change alone.
           ssh-key: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
           ref: main
-          # Full history: the rebase in the push retry needs something to
-          # rebase onto.
           fetch-depth: 0
 
       - name: Install kustomize
@@ -337,13 +341,9 @@ jobs:
             | tar -xz -C "$RUNNER_TEMP" kustomize
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Set the image tag
+      - name: Branch, set the image tag, commit
+        id: commit
         working-directory: apps/mcp-approval-gate/overlays/liam-dev
-        run: |
-          kustomize edit set image \
-            "mcp-approval-gate-backend=${{ secrets.REGISTRY_ENDPOINT }}/mcp-approval-gate-backend:${{ needs.image.outputs.image_tag }}"
-
-      - name: Commit and push, retrying if another component got there first
         env:
           TAG: ${{ needs.image.outputs.image_tag }}
         run: |
@@ -351,23 +351,55 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Branch name is unique per component+tag, so backend/frontend/executor
+          # firing together no longer race on one shared branch/push the way the
+          # old direct-push flow did -- each opens its own PR against the same
+          # file, and any resulting merge conflict is an ordinary PR-review
+          # concern for whoever merges second, not something CI needs to retry.
+          branch="bump-backend-${TAG}"
+          git switch -c "$branch"
+
+          kustomize edit set image \
+            "mcp-approval-gate-backend=${{ secrets.REGISTRY_ENDPOINT }}/mcp-approval-gate-backend:${TAG}"
+
           # Re-running a workflow on an unchanged sha is a no-op, not a failure.
           if git diff --quiet; then
-            echo "image already at ${TAG}; nothing to commit"
+            echo "image already at ${TAG}; nothing to propose"
+            echo "branch=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -am "backend: ${TAG} (from ${GITHUB_REPOSITORY}@${GITHUB_SHA})"
+          # Re-running this workflow (e.g. workflow_dispatch retry) on the same
+          # sha reuses the same branch name -- force-push so the retry replaces
+          # a stale/abandoned attempt instead of failing on a name collision.
+          git push --force origin "HEAD:refs/heads/${branch}"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
 
-          # The concurrency group above serializes this workflow's own runs, but
-          # a human commit can still land between our fetch and our push.
-          for attempt in 1 2 3 4 5; do
-            if git push origin HEAD:main; then
-              echo "pushed on attempt ${attempt}"
-              exit 0
-            fi
-            echo "push rejected, rebasing and retrying (attempt ${attempt})"
-            git pull --rebase origin main
-          done
-          echo "could not push after 5 attempts" >&2
-          exit 1
+      - name: Open the PR
+        if: steps.commit.outputs.branch != ''
+        working-directory: apps/mcp-approval-gate
+        env:
+          # Separate from DEPLOY_REPO_SSH_KEY on purpose: the SSH key only ever
+          # touches git (clone/push over SSH); gh talks to the GitHub API over
+          # HTTPS and needs its own token. Scope this one narrowly --
+          # `pull-requests: write` + `contents: read` on liam-dev-k8s-argoCD
+          # only, nothing else -- since unlike the SSH key it CAN be scoped
+          # that tightly (a fine-grained PAT or GitHub App installation token,
+          # not a classic PAT).
+          GH_TOKEN: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+          TAG: ${{ needs.image.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --repo liam-ng/liam-dev-k8s-argoCD \
+            --base main \
+            --head "$BRANCH" \
+            --title "backend: bump image to ${TAG}" \
+            --body "Opened by mcp-approval-gate CI from ${GITHUB_REPOSITORY}@${GITHUB_SHA}.
+
+          Merging this is what makes Argo CD deploy it -- selfHeal + auto-sync
+          picks up the merge commit on main same as any other change here.
+          verify-and-rollback.yml in this repo watches for that and opens a
+          revert PR on its own if the new pod never comes up healthy."
