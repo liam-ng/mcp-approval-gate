@@ -35,7 +35,6 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           # SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          DEPLOY_REPO_SSH_KEY: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
           MANIFEST_REPO_PR_TOKEN: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
           # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
@@ -70,17 +69,8 @@ jobs:
           require AZURE_TENANT_ID "azure/login OIDC federation, needed to push to ACR"
           require AZURE_SUBSCRIPTION_ID "azure/login OIDC federation, needed to push to ACR"
 
-          # Soft, not hard, on purpose: without it the pipeline still builds,
-          # scans and publishes the image correctly -- only the manifest-repo
-          # bump is skipped, so the image exists but nothing deploys it. Making
-          # it required would fail every PR too, which it has no part in.
-          note DEPLOY_REPO_SSH_KEY "write deploy key for liam-dev-k8s-argoCD; without it the image publishes but the deploy job cannot push the bump branch, so no PR gets opened" || true
-          # Fine-grained PAT or GitHub App installation token, NOT a classic PAT --
-          # scoped to pull-requests:write + contents:read on liam-dev-k8s-argoCD only.
-          # Separate credential from the SSH key above: that one authenticates git
-          # (push the branch), this one authenticates the GitHub API (open the PR) --
-          # `gh pr create` needs its own token regardless of how the branch got there.
-          note MANIFEST_REPO_PR_TOKEN "PR-open token for liam-dev-k8s-argoCD; without it the branch pushes but no PR gets opened, so a human has to open it by hand" || true
+          # Fine-grained PAT token at liam-ng/liam-dev-k8s-argoCD
+          note MANIFEST_REPO_PR_TOKEN "PAT for liam-dev-k8s-argoCD (push + open PR); without it the image publishes but nothing proposes the tag bump, so Argo never sees it" || true
 
           echo "--------------------------------"
           echo "Optional Secrets:"
@@ -155,9 +145,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # SonarCloud already hosts the full report — link to it rather than
-      # duplicating it here. always() so the link is present on the runs that
-      # matter most: the ones where the gate above failed.
+      # SonarCloud full report link
       - name: Link SonarQube dashboard in summary
         if: always() && steps.cfg.outputs.enabled == 'true'
         run: |
@@ -181,13 +169,9 @@ jobs:
       id-token: write
       contents: read
     outputs:
-      # The immutable per-sha tag this run published. The deploy job cannot
-      # recompute it: it checks out the MANIFEST repo, so `git rev-parse HEAD`
-      # there is a different commit entirely.
+      # Immutable per-sha image tag published and checkout
       image_tag: ${{ steps.ref.outputs.image_tag }}
     env:
-      # Full ACR login server FQDN (name-<suffix>.azurecr.io). Image tags use
-      # this host; az acr login uses --name/--suffix parsed from it.
       REGISTRY: ${{ secrets.REGISTRY_ENDPOINT }}
     steps:
       - uses: actions/checkout@v7
@@ -211,9 +195,7 @@ jobs:
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
-      # Reports everything the gate below does NOT fail on: HIGH severity, and
-      # CRITICALs with no fix yet. Runs first and never fails, so the report
-      # exists even when the gate stops the run.
+      # Reports only does NOT fail: High, CRITICALs CVE with no fix yet.
       - name: Output Trivy report and upload as artifact
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -223,9 +205,7 @@ jobs:
           format: table
           output: trivy-backend.txt
 
-      # Same scan in Trivy's native JSON — the table is for humans, this is what
-      # downstream tooling can parse. skip-setup-trivy reuses the binary and DB
-      # the step above already fetched.
+      # Same Trivy scan for downstream. skip-setup-trivy reuses the fetched binary and DB
       - name: Output Trivy report as JSON
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -252,8 +232,7 @@ jobs:
             trivy-backend.txt
             trivy-backend.json
 
-      # Hard gate: exit-code 1 fails before any push. ignore-unfixed is
-      # deliberate — an unfixable base-image CVE can't be actioned here.
+      # Hard gate: exit-code 1 fails before any push. ignore-unfixed.
       - name: Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -268,7 +247,7 @@ jobs:
       # start container, poll readiness; check /api/healthz body; assert GET / is 404 so a leaked static/ can't fight httproute.yaml for routing; assert UID 1001;
       - run: ./pipelines/backend/ci.sh smoke
 
-      # PRs build, scan and smoke test but never publish.
+      # PRs build, scan and smoke test but NOT publish.
       - name: Azure login (OIDC federated)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: azure/login@v3
@@ -277,16 +256,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Login server is {name}-{suffix}.azurecr.io. --suffix is required when
-      # the identity can push images but cannot read the ACR ARM resource
-      # (az would otherwise fall back to name.azurecr.io and fail).
+      
+      # ACR uses No reuse Domain name label scope. --name/--suffix is required for proper connection.
       - name: ACR login
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           host="${REGISTRY%.azurecr.io}"
           az acr login --name "${host%%-*}" --suffix "${host#*-}"
 
-      # Re-runs the Build step's action with push instead of load. Every layer is a cache hit from that step
+      # Re-runs the Build step's action with push and cache hit from last step
       - name: Push Image to ACR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v7
@@ -299,15 +277,9 @@ jobs:
           cache-from: type=gha,scope=backend
 
   # ---------------------------------------------------------------------------
-  # Close the GitOps loop. Argo CD does not watch registries, so pushing an
-  # image is not a deployment -- landing its tag in the manifest repo's main is
-  # what makes a merge actually roll out. This job PROPOSES that via a PR
-  # rather than pushing straight to main -- see the PR's own description for
-  # why. Health-check-and-revert-on-failure now lives entirely in the manifest
-  # repo (verify-and-rollback.yml there), triggered by ITS OWN push to main,
-  # because a PR merge can happen minutes or days after this job runs -- there
-  # is no "immediately after" moment in this workflow to chain a followup job
-  # onto anymore.
+  # Push a PR to liam-ng/liam-dev-k8s-argoCD repo for image tag bump
+  # verify-and-rollback.yml triggered by OWN push to main to chain a followup job
+
   deploy:
     name: Open a backend image-bump PR against the manifest repo
     needs: image
@@ -321,21 +293,14 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: liam-ng/liam-dev-k8s-argoCD
-          # Deploy key with WRITE access -- a different key from the read-only
-          # one Argo CD reads this repo with. Using ssh-key (not token) also
-          # points the remote at git@github.com, which is what that key serves.
-          # Still needed even though this job no longer pushes to main: opening
-          # a PR still means pushing the proposal BRANCH somewhere, and this key
-          # is what's authorized to do that. See the PR description below for
-          # why this can't be narrowed away by the PR-flow change alone.
-          ssh-key: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
+          # Fine-grained PAT to open PR
+          token: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
           ref: main
           fetch-depth: 0
 
       - name: Install kustomize
         run: |
-          # Pinned. `kustomize edit set image` rewrites a file Argo reconciles,
-          # so the tool that writes it should not float.
+          # Version Pin. Prevents kustomize rewrites for consistent Argo output
           version=5.7.1
           curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${version}/kustomize_v${version}_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" kustomize
@@ -351,18 +316,15 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Branch name is unique per component+tag, so backend/frontend/executor
-          # firing together no longer race on one shared branch/push the way the
-          # old direct-push flow did -- each opens its own PR against the same
-          # file, and any resulting merge conflict is an ordinary PR-review
-          # concern for whoever merges second, not something CI needs to retry.
+          # Branch name is unique per component+tag,  
+          # Prevents backend/frontend/executor racing on one push preventing merge conflict
           branch="bump-backend-${TAG}"
           git switch -c "$branch"
 
           kustomize edit set image \
             "mcp-approval-gate-backend=${{ secrets.REGISTRY_ENDPOINT }}/mcp-approval-gate-backend:${TAG}"
 
-          # Re-running a workflow on an unchanged sha is a no-op, not a failure.
+          # Prevent no-op: re-running workflow on an unchanged sha.
           if git diff --quiet; then
             echo "image already at ${TAG}; nothing to propose"
             echo "branch=" >> "$GITHUB_OUTPUT"
@@ -370,9 +332,7 @@ jobs:
           fi
 
           git commit -am "backend: ${TAG} (from ${GITHUB_REPOSITORY}@${GITHUB_SHA})"
-          # Re-running this workflow (e.g. workflow_dispatch retry) on the same
-          # sha reuses the same branch name -- force-push so the retry replaces
-          # a stale/abandoned attempt instead of failing on a name collision.
+          # Re-running workflow reuses the same branch name -- force-push is required for stale/abandoned attempt instead of failing on a name collision.
           git push --force origin "HEAD:refs/heads/${branch}"
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
 
@@ -380,13 +340,7 @@ jobs:
         if: steps.commit.outputs.branch != ''
         working-directory: apps/mcp-approval-gate
         env:
-          # Separate from DEPLOY_REPO_SSH_KEY on purpose: the SSH key only ever
-          # touches git (clone/push over SSH); gh talks to the GitHub API over
-          # HTTPS and needs its own token. Scope this one narrowly --
-          # `pull-requests: write` + `contents: read` on liam-dev-k8s-argoCD
-          # only, nothing else -- since unlike the SSH key it CAN be scoped
-          # that tightly (a fine-grained PAT or GitHub App installation token,
-          # not a classic PAT).
+          # Same PAT as the checkout step above -- gh reads GH_TOKEN directly, no separate `gh auth login` needed.
           GH_TOKEN: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
           BRANCH: ${{ steps.commit.outputs.branch }}
           TAG: ${{ needs.image.outputs.image_tag }}
@@ -399,7 +353,5 @@ jobs:
             --title "backend: bump image to ${TAG}" \
             --body "Opened by mcp-approval-gate CI from ${GITHUB_REPOSITORY}@${GITHUB_SHA}.
 
-          Merging this is what makes Argo CD deploy it -- selfHeal + auto-sync
-          picks up the merge commit on main same as any other change here.
-          verify-and-rollback.yml in this repo watches for that and opens a
-          revert PR on its own if the new pod never comes up healthy."
+          Merging for Argo CD deploy it -- selfHeal + auto-sync picks up the changes
+          verify-and-rollback.yml probes the new pod and opens a revert PR if not healthy."

@@ -35,7 +35,7 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           # SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          DEPLOY_REPO_SSH_KEY: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
+          MANIFEST_REPO_PR_TOKEN: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
           # SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
         # require() Hard and note() Soft gate functions are used to check if the required secrets are configured
@@ -69,11 +69,8 @@ jobs:
           require AZURE_TENANT_ID "azure/login OIDC federation, needed to push to ACR"
           require AZURE_SUBSCRIPTION_ID "azure/login OIDC federation, needed to push to ACR"
 
-          # Soft, not hard, on purpose: without it the pipeline still builds,
-          # scans and publishes the image correctly -- only the manifest-repo
-          # bump is skipped, so the image exists but nothing deploys it. Making
-          # it required would fail every PR too, which it has no part in.
-          note DEPLOY_REPO_SSH_KEY "write deploy key for liam-dev-k8s-argoCD; without it the image publishes but the deploy job cannot commit the tag, so Argo never sees it" || true
+          # Fine-grained PAT token at liam-ng/liam-dev-k8s-argoCD
+          note MANIFEST_REPO_PR_TOKEN "PAT for liam-dev-k8s-argoCD (push + open PR); without it the image publishes but nothing proposes the tag bump, so Argo never sees it" || true
 
           echo "--------------------------------"
           echo "Optional Secrets:"
@@ -293,58 +290,39 @@ jobs:
           cache-from: type=gha,scope=executor
 
   # ---------------------------------------------------------------------------
-  # Close the GitOps loop. Argo CD does not watch registries, so pushing an
-  # image is not a deployment -- committing its tag to the manifest repo is what
-  # makes a merge actually roll out. This is also what makes the deployed
-  # revision a recorded fact rather than "whatever :main pointed at last".
+  # Push a PR to liam-ng/liam-dev-k8s-argoCD repo for image tag bump
+  # verify-and-rollback.yml triggered by OWN push to main to chain a followup job
+  # Note: executor is headless, so the health probe there checks backend/frontend only.
+
   deploy:
-    name: Bump executor image in the manifest repo
+    name: Open an executor image-bump PR against the manifest repo
     needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: liam-dev
     permissions:
       contents: read
-    # A merge touching backend, frontend and executor fires all three workflows
-    # at once, and they all write the same file in the same repo. Serialize them
-    # or the second and third pushes race and lose.
-    #
-    # cancel-in-progress is stated explicitly even though false is the default:
-    # a cancelled deploy job would silently drop an image bump behind a green
-    # tick, which is the worst possible failure mode for this job.
-    concurrency:
-      group: deploy-repo-write
-      cancel-in-progress: false
     steps:
       - name: Checkout the manifest repo
         uses: actions/checkout@v7
         with:
           repository: liam-ng/liam-dev-k8s-argoCD
-          # Deploy key with WRITE access -- a different key from the read-only
-          # one Argo CD reads this repo with. Using ssh-key (not token) also
-          # points the remote at git@github.com, which is what that key serves.
-          ssh-key: ${{ secrets.DEPLOY_REPO_SSH_KEY }}
+          # Fine-grained PAT to open PR
+          token: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
           ref: main
-          # Full history: the rebase in the push retry needs something to
-          # rebase onto.
           fetch-depth: 0
 
       - name: Install kustomize
         run: |
-          # Pinned. `kustomize edit set image` rewrites a file Argo reconciles,
-          # so the tool that writes it should not float.
+          # Version Pin. Prevents kustomize rewrites for consistent Argo output
           version=5.7.1
           curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${version}/kustomize_v${version}_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" kustomize
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Set the image tag
+      - name: Branch, set the image tag, commit
+        id: commit
         working-directory: apps/mcp-approval-gate/overlays/liam-dev
-        run: |
-          kustomize edit set image \
-            "mcp-approval-gate-executor=${{ secrets.REGISTRY_ENDPOINT }}/mcp-approval-gate-executor:${{ needs.image.outputs.image_tag }}"
-
-      - name: Commit and push, retrying if another component got there first
         env:
           TAG: ${{ needs.image.outputs.image_tag }}
         run: |
@@ -352,23 +330,42 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Re-running a workflow on an unchanged sha is a no-op, not a failure.
+          # Branch name is unique per component+tag,
+          # Prevents backend/frontend/executor racing on one push preventing merge conflict
+          branch="bump-executor-${TAG}"
+          git switch -c "$branch"
+
+          kustomize edit set image \
+            "mcp-approval-gate-executor=${{ secrets.REGISTRY_ENDPOINT }}/mcp-approval-gate-executor:${TAG}"
+
+          # Prevent no-op: re-running workflow on an unchanged sha.
           if git diff --quiet; then
-            echo "image already at ${TAG}; nothing to commit"
+            echo "image already at ${TAG}; nothing to propose"
+            echo "branch=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -am "executor: ${TAG} (from ${GITHUB_REPOSITORY}@${GITHUB_SHA})"
+          # Re-running workflow reuses the same branch name -- force-push is required for stale/abandoned attempt instead of failing on a name collision.
+          git push --force origin "HEAD:refs/heads/${branch}"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
 
-          # The concurrency group above serializes this workflow's own runs, but
-          # a human commit can still land between our fetch and our push.
-          for attempt in 1 2 3 4 5; do
-            if git push origin HEAD:main; then
-              echo "pushed on attempt ${attempt}"
-              exit 0
-            fi
-            echo "push rejected, rebasing and retrying (attempt ${attempt})"
-            git pull --rebase origin main
-          done
-          echo "could not push after 5 attempts" >&2
-          exit 1
+      - name: Open the PR
+        if: steps.commit.outputs.branch != ''
+        working-directory: apps/mcp-approval-gate
+        env:
+          # Same PAT as the checkout step above -- gh reads GH_TOKEN directly, no separate `gh auth login` needed.
+          GH_TOKEN: ${{ secrets.MANIFEST_REPO_PR_TOKEN }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+          TAG: ${{ needs.image.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --repo liam-ng/liam-dev-k8s-argoCD \
+            --base main \
+            --head "$BRANCH" \
+            --title "executor: bump image to ${TAG}" \
+            --body "Opened by mcp-approval-gate CI from ${GITHUB_REPOSITORY}@${GITHUB_SHA}.
+
+          Merging for Argo CD deploy it -- selfHeal + auto-sync picks up the changes
+          verify-and-rollback.yml probes the new pod and opens a revert PR if not healthy."
