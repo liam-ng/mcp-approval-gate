@@ -253,19 +253,6 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # Login to ACR using admin credentials
-      # - name: Container Registry Login
-      #   # You may pin to the exact commit or the version.
-      #   # uses: SeptBlast/docker-login@fa2bf883f114ec2cbda12ab5d5de51d675895172
-      #   uses: SeptBlast/docker-login@v1.1.2
-      #   with:
-      #     # Container registry username
-      #     username: # default is 
-      #     # Container registry password
-      #     password: # default is 
-      #     # Container registry server url
-      #     login-server: # default is https://index.docker.io/v1/
           
       # Login server is {name}-{suffix}.azurecr.io. --suffix is required when
       # the identity can push images but cannot read the ACR ARM resource
@@ -292,8 +279,8 @@ jobs:
   # Push a PR to liam-ng/liam-dev-k8s-argoCD repo for image tag bump
   # verify-and-rollback.yml triggered by OWN push to main to chain a followup job
 
-  deploy:
-    name: Open a frontend image-bump PR against the manifest repo
+  delivery:
+    name: Deliver frontend image tag to the manifest repo (PR)
     needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -336,7 +323,7 @@ jobs:
           kustomize edit set image \
             "mcp-approval-gate-frontend=${{ secrets.REGISTRY_ENDPOINT }}/mcp-approval-gate-frontend:${TAG}"
 
-          # Prevent no-op: re-running workflow on an unchanged sha.
+          # Prevent a no-op PR when the manifest already references this image tag.
           if git diff --quiet; then
             echo "image already at ${TAG}; nothing to propose"
             echo "branch=" >> "$GITHUB_OUTPUT"
@@ -358,6 +345,13 @@ jobs:
           TAG: ${{ needs.image.outputs.image_tag }}
         run: |
           set -euo pipefail
+          # Skip if a retry finds a PR already open for this branch
+          existing_pr="$(gh pr list --repo liam-ng/liam-dev-k8s-argoCD --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing_pr" ]]; then
+            echo "PR #${existing_pr} already exists"
+            exit 0
+          fi
+
           gh pr create \
             --repo liam-ng/liam-dev-k8s-argoCD \
             --base main \
