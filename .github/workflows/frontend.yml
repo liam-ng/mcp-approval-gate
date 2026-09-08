@@ -278,6 +278,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # Push a PR to liam-ng/liam-dev-k8s-argoCD repo for image tag bump
   # verify-and-rollback.yml triggered by OWN push to main to chain a followup job
+  # Workflow-only commits still exercise delivery: path filter includes this file.
 
   delivery:
     name: Deliver frontend image tag to the manifest repo (PR)
