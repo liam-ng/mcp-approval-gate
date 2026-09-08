@@ -297,7 +297,13 @@ jobs:
   delivery:
     name: Deliver executor image tag to the manifest repo (PR)
     needs: image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # always(): sonarqube is often skipped (no SONAR_TOKEN); image continues via always(),
+    # but a skip earlier in the needs chain still skips dependents unless they also use a status fn.
+    if: >-
+      always()
+      && needs.image.result == 'success'
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: liam-dev
     permissions:
